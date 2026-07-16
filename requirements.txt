@@ -1,1 +1,3 @@
+graphviz==0.21
 pandas==3.0.3
+streamlit==1.59.2
