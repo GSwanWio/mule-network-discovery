@@ -1,4 +1,4 @@
-"""Smoke test for the basic Streamlit interface."""
+"""Smoke test for the Streamlit discovery interface."""
 
 from __future__ import annotations
 
@@ -21,14 +21,39 @@ def main() -> None:
     app.run()
 
     assert not app.exception
-    assert len(app.title) == 1
-    assert app.title[0].value == "Mule Network Discovery"
-    assert len(app.metric) == 9
-    assert len(app.dataframe) == 3
 
-    print("Streamlit interface smoke test passed.")
-    print(f"Metrics rendered: {len(app.metric)}")
-    print(f"Dataframes rendered: {len(app.dataframe)}")
+    assert len(app.title) == 1
+    assert (
+        app.title[0].value
+        == "Mule Network Discovery"
+    )
+
+    assert len(app.metric) >= 13
+    assert len(app.dataframe) >= 6
+
+    warning_text = " ".join(
+        warning.value
+        for warning in app.warning
+    )
+
+    assert (
+        "candidate evidence only"
+        in warning_text
+    )
+
+    print(
+        "Streamlit interface smoke test passed."
+    )
+    print(
+        f"Metrics rendered: {len(app.metric)}"
+    )
+    print(
+        f"Dataframes rendered: "
+        f"{len(app.dataframe)}"
+    )
+    print(
+        "Unexpanded candidate warning: passed"
+    )
 
 
 if __name__ == "__main__":
