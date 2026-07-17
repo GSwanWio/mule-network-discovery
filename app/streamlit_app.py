@@ -1,4 +1,4 @@
-"""Basic interface for viewing mule-network discovery outputs."""
+"""Unified seed-led mule network interface."""
 
 from __future__ import annotations
 
@@ -11,21 +11,9 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIRECTORY = PROJECT_ROOT / "data/demo/output"
 
-GROUPS_PATH = OUTPUT_DIRECTORY / "discovered_groups.csv"
-NODES_PATH = OUTPUT_DIRECTORY / "discovered_group_nodes.csv"
-EDGES_PATH = OUTPUT_DIRECTORY / "discovered_group_edges.csv"
-
-COUNTERPARTY_CANDIDATES_PATH = (
-    OUTPUT_DIRECTORY / "counterparty_candidates.csv"
-)
-
-COUNTERPARTY_LINKS_PATH = (
-    OUTPUT_DIRECTORY / "counterparty_candidate_links.csv"
-)
-
-BENEFICIARY_LINKS_PATH = (
-    OUTPUT_DIRECTORY / "beneficiary_seed_links.csv"
-)
+GROUPS_PATH = OUTPUT_DIRECTORY / "unified_groups.csv"
+NODES_PATH = OUTPUT_DIRECTORY / "unified_group_nodes.csv"
+EDGES_PATH = OUTPUT_DIRECTORY / "unified_group_edges.csv"
 
 
 st.set_page_config(
@@ -35,8 +23,23 @@ st.set_page_config(
 )
 
 
+def _read_csv(path: Path) -> pd.DataFrame:
+    """Read a required persisted output."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing output file: "
+            f"{path.relative_to(PROJECT_ROOT)}"
+        )
+
+    return pd.read_csv(
+        path,
+        dtype="string",
+        keep_default_na=False,
+    )
+
+
 def _parse_boolean(series: pd.Series) -> pd.Series:
-    """Convert persisted boolean values into Python booleans."""
+    """Convert persisted boolean text to booleans."""
     return (
         series
         .astype("string")
@@ -46,129 +49,63 @@ def _parse_boolean(series: pd.Series) -> pd.Series:
     )
 
 
-def _read_csv(
-    path: Path,
-    dtype: str | dict[str, str] = "string",
-) -> pd.DataFrame:
-    """Read one required discovery output."""
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Missing output file: "
-            f"{path.relative_to(PROJECT_ROOT)}"
-        )
-
-    return pd.read_csv(
-        path,
-        dtype=dtype,
-        keep_default_na=False,
-    )
-
-
 @st.cache_data
-def load_eid_outputs() -> tuple[
+def load_unified_outputs() -> tuple[
     pd.DataFrame,
     pd.DataFrame,
     pd.DataFrame,
 ]:
-    """Load persisted Section 1 graph outputs."""
-    groups = _read_csv(
-        GROUPS_PATH,
-        dtype={
-            "run_id": "string",
-            "run_date": "string",
-            "group_id": "string",
-            "group_type": "string",
-        },
-    )
-
+    """Load the unified group projection."""
+    groups = _read_csv(GROUPS_PATH)
     nodes = _read_csv(NODES_PATH)
     edges = _read_csv(EDGES_PATH)
 
-    group_count_columns = [
+    numeric_group_columns = [
         "seed_entity_count",
-        "discovered_entity_count",
-        "total_entity_count",
-        "eid_count",
-        "edge_count",
+        "customer_count",
+        "counterparty_count",
+        "eid_link_count",
+        "counterparty_candidate_count",
+        "shared_counterparty_customer_count",
+        "beneficiary_seed_link_count",
+        "customer_assessment_pending_count",
+        "counterparty_ai_pending_count",
+        "recursive_expansion_source_count",
+        "total_node_count",
+        "total_edge_count",
     ]
 
-    for column in group_count_columns:
+    for column in numeric_group_columns:
         groups[column] = pd.to_numeric(
             groups[column],
             errors="raise",
         ).astype(int)
 
-    nodes["seed_flag"] = _parse_boolean(
-        nodes["seed_flag"]
-    )
+    node_boolean_columns = [
+        "customer_discovery_allowed_flag",
+        "expansion_source_flag",
+    ]
 
-    nodes["discovered_flag"] = _parse_boolean(
-        nodes["discovered_flag"]
-    )
+    for column in node_boolean_columns:
+        nodes[column] = _parse_boolean(
+            nodes[column]
+        )
 
-    edges["deterministic_flag"] = _parse_boolean(
-        edges["deterministic_flag"]
-    )
+    edge_boolean_columns = [
+        "customer_discovery_allowed_flag",
+        "recursive_expansion_allowed_flag",
+    ]
+
+    for column in edge_boolean_columns:
+        edges[column] = _parse_boolean(
+            edges[column]
+        )
 
     return groups, nodes, edges
 
 
-@st.cache_data
-def load_counterparty_outputs() -> tuple[
-    pd.DataFrame,
-    pd.DataFrame,
-    pd.DataFrame,
-]:
-    """Load persisted Section 2 candidate outputs."""
-    candidates = _read_csv(
-        COUNTERPARTY_CANDIDATES_PATH
-    )
-
-    links = _read_csv(
-        COUNTERPARTY_LINKS_PATH
-    )
-
-    beneficiary_links = _read_csv(
-        BENEFICIARY_LINKS_PATH
-    )
-
-    candidate_numeric_columns = [
-        "candidate_customer_count",
-        "seed_event_count",
-        "candidate_event_count",
-    ]
-
-    for column in candidate_numeric_columns:
-        candidates[column] = pd.to_numeric(
-            candidates[column],
-            errors="raise",
-        ).astype(int)
-
-    candidates["expansion_allowed_flag"] = (
-        _parse_boolean(
-            candidates["expansion_allowed_flag"]
-        )
-    )
-
-    links["expansion_allowed_flag"] = (
-        _parse_boolean(
-            links["expansion_allowed_flag"]
-        )
-    )
-
-    beneficiary_links[
-        "expansion_allowed_flag"
-    ] = _parse_boolean(
-        beneficiary_links[
-            "expansion_allowed_flag"
-        ]
-    )
-
-    return candidates, links, beneficiary_links
-
-
 def _escape_dot(value: object) -> str:
-    """Escape a value for use inside a Graphviz label."""
+    """Escape text for a Graphviz label."""
     return (
         str(value)
         .replace("\\", "\\\\")
@@ -177,54 +114,132 @@ def _escape_dot(value: object) -> str:
     )
 
 
-def build_eid_graphviz_dot(
+def _humanize(value: object) -> str:
+    """Convert an internal status to display text."""
+    return (
+        str(value)
+        .replace("_", " ")
+        .title()
+    )
+
+
+def _build_node_statement(
+    row: object,
+) -> str:
+    """Build one Graphviz node statement."""
+    node_id = _escape_dot(row.node_id)
+
+    if row.node_type == "COUNTERPARTY":
+        label_lines = [
+            row.display_label,
+            "External counterparty",
+            _humanize(row.node_status),
+        ]
+
+        shape = "ellipse"
+        style = "dashed"
+        penwidth = "1"
+
+    else:
+        label_lines = [
+            row.entity_key,
+            _humanize(row.node_status),
+            _humanize(
+                row.customer_assessment_status
+            ),
+        ]
+
+        if row.expansion_source_flag:
+            shape = "doublecircle"
+            style = "solid"
+            penwidth = "2"
+        elif (
+            row.node_status
+            == "OBSERVED_PENDING_COUNTERPARTY_AI"
+        ):
+            shape = "box"
+            style = "dashed"
+            penwidth = "1"
+        else:
+            shape = "box"
+            style = "solid"
+            penwidth = "1"
+
+    label = _escape_dot(
+        "\n".join(label_lines)
+    )
+
+    return (
+        f'"{node_id}" '
+        f'[label="{label}", '
+        f'shape="{shape}", '
+        f'style="{style}", '
+        f'penwidth="{penwidth}"];'
+    )
+
+
+def _edge_display_properties(
+    edge_type: str,
+) -> tuple[str, str, str]:
+    """Return label, style, and direction."""
+    properties = {
+        "SAME_EMIRATES_ID": (
+            "Same Emirates ID",
+            "solid",
+            "none",
+        ),
+        "SEED_COUNTERPARTY_EVIDENCE": (
+            "Seed transfer evidence",
+            "dashed",
+            "forward",
+        ),
+        "SHARED_EXTERNAL_COUNTERPARTY": (
+            "Shared counterparty",
+            "dashed",
+            "forward",
+        ),
+        "BENEFICIARY_ADDED_SEED_ACCOUNT": (
+            "Added seed as beneficiary",
+            "solid",
+            "forward",
+        ),
+    }
+
+    return properties.get(
+        edge_type,
+        (
+            _humanize(edge_type),
+            "dashed",
+            "forward",
+        ),
+    )
+
+
+def build_group_graphviz_dot(
     group_nodes: pd.DataFrame,
     group_edges: pd.DataFrame,
 ) -> str:
-    """Build an undirected EID group graph."""
+    """Build one unified observed-evidence graph."""
     lines = [
-        "graph network {",
+        "digraph network {",
         "rankdir=LR;",
-        'graph [bgcolor="transparent", pad="0.2", '
-        'nodesep="0.8", ranksep="1.0"];',
-        'node [fontname="Arial", fontsize="11"];',
+        'graph [bgcolor="transparent", '
+        'pad="0.2", nodesep="0.8", '
+        'ranksep="1.0"];',
+        'node [fontname="Arial", fontsize="10"];',
         'edge [fontname="Arial", fontsize="9"];',
     ]
 
-    for row in group_nodes.itertuples(index=False):
-        role = (
-            "Seed"
-            if row.seed_flag
-            else "Discovered"
-        )
-
-        label = _escape_dot(
-            "\n".join(
-                [
-                    row.entity_type,
-                    row.entity_id,
-                    role,
-                ]
-            )
-        )
-
-        node_id = _escape_dot(row.node_id)
-
-        if row.seed_flag:
-            shape = "doublecircle"
-            pen_width = "2"
-        else:
-            shape = "box"
-            pen_width = "1"
-
+    for row in group_nodes.itertuples(
+        index=False
+    ):
         lines.append(
-            f'"{node_id}" '
-            f'[label="{label}", '
-            f'shape="{shape}", '
-            f'penwidth="{pen_width}"];'
+            _build_node_statement(row)
         )
 
-    for row in group_edges.itertuples(index=False):
+    for row in group_edges.itertuples(
+        index=False
+    ):
         source_node_id = _escape_dot(
             row.source_node_id
         )
@@ -233,10 +248,22 @@ def build_eid_graphviz_dot(
             row.target_node_id
         )
 
+        (
+            edge_label,
+            edge_style,
+            edge_direction,
+        ) = _edge_display_properties(
+            row.edge_type
+        )
+
+        label = _escape_dot(edge_label)
+
         lines.append(
-            f'"{source_node_id}" -- '
+            f'"{source_node_id}" -> '
             f'"{target_node_id}" '
-            '[label="Same EID"];'
+            f'[label="{label}", '
+            f'style="{edge_style}", '
+            f'dir="{edge_direction}"];'
         )
 
     lines.append("}")
@@ -244,210 +271,212 @@ def build_eid_graphviz_dot(
     return "\n".join(lines)
 
 
-def build_counterparty_graphviz_dot(
-    candidate: pd.Series,
-    candidate_links: pd.DataFrame,
-) -> str:
-    """Build one unexpanded shared-counterparty candidate graph."""
-    seed_node_id = "seed"
-    counterparty_node_id = "counterparty"
+def render_group_summary(
+    selected_group: pd.Series,
+) -> None:
+    """Render selected group metrics."""
+    first_row = st.columns(6)
 
-    seed_label = _escape_dot(
-        "\n".join(
-            [
-                candidate["seed_entity_type"],
-                candidate["seed_entity_id"],
-                "Seed mule",
+    first_row[0].metric(
+        "Seed",
+        selected_group[
+            "group_anchor_seed_entity_key"
+        ],
+    )
+
+    first_row[1].metric(
+        "Customers",
+        int(selected_group["customer_count"]),
+    )
+
+    first_row[2].metric(
+        "Counterparties",
+        int(
+            selected_group[
+                "counterparty_count"
             ]
-        )
+        ),
     )
 
-    counterparty_name = (
-        candidate["counterparty_names"]
-        or candidate["counterparty_key"]
+    first_row[3].metric(
+        "EID links",
+        int(selected_group["eid_link_count"]),
     )
 
-    counterparty_label = _escape_dot(
-        "\n".join(
-            [
-                str(counterparty_name),
-                candidate["counterparty_key_type"],
-                "Candidate only",
+    first_row[4].metric(
+        "Shared-counterparty links",
+        int(
+            selected_group[
+                "shared_counterparty_customer_count"
             ]
-        )
+        ),
     )
 
-    lines = [
-        "digraph candidate {",
-        "rankdir=LR;",
-        'graph [bgcolor="transparent", pad="0.2", '
-        'nodesep="0.8", ranksep="1.0"];',
-        'node [fontname="Arial", fontsize="11"];',
-        'edge [fontname="Arial", fontsize="9"];',
-        (
-            f'"{seed_node_id}" '
-            f'[label="{seed_label}", '
-            'shape="doublecircle", penwidth="2"];'
+    first_row[5].metric(
+        "Beneficiary links",
+        int(
+            selected_group[
+                "beneficiary_seed_link_count"
+            ]
         ),
-        (
-            f'"{counterparty_node_id}" '
-            f'[label="{counterparty_label}", '
-            'shape="ellipse", style="dashed"];'
-        ),
-        (
-            f'"{seed_node_id}" -> '
-            f'"{counterparty_node_id}" '
-            '[label="Seed transfer evidence"];'
-        ),
-    ]
+    )
 
-    for index, row in enumerate(
-        candidate_links.itertuples(index=False),
-        start=1,
+    second_row = st.columns(4)
+
+    second_row[0].metric(
+        "Customer AI pending",
+        int(
+            selected_group[
+                "customer_assessment_pending_count"
+            ]
+        ),
+    )
+
+    second_row[1].metric(
+        "Counterparty AI pending",
+        int(
+            selected_group[
+                "counterparty_ai_pending_count"
+            ]
+        ),
+    )
+
+    second_row[2].metric(
+        "Expansion sources",
+        int(
+            selected_group[
+                "recursive_expansion_source_count"
+            ]
+        ),
+    )
+
+    second_row[3].metric(
+        "Total evidence edges",
+        int(selected_group["total_edge_count"]),
+    )
+
+
+def render_group_tables(
+    selected_nodes: pd.DataFrame,
+    selected_edges: pd.DataFrame,
+) -> None:
+    """Render detailed node and edge evidence."""
+    customer_nodes = selected_nodes.loc[
+        selected_nodes["node_type"]
+        == "CUSTOMER"
+    ].copy()
+
+    counterparty_nodes = selected_nodes.loc[
+        selected_nodes["node_type"]
+        == "COUNTERPARTY"
+    ].copy()
+
+    with st.expander(
+        "Customer nodes",
+        expanded=False,
     ):
-        candidate_node_id = f"candidate_{index}"
-
-        candidate_label = _escape_dot(
-            "\n".join(
+        st.dataframe(
+            customer_nodes[
                 [
-                    row.candidate_entity_type,
-                    row.candidate_entity_id,
-                    "Candidate customer",
+                    "entity_key",
+                    "node_roles",
+                    "node_status",
+                    "customer_assessment_status",
+                    "customer_discovery_allowed_flag",
+                    "expansion_source_flag",
+                    "first_seen_date",
+                    "last_seen_date",
                 ]
-            )
+            ],
+            width="stretch",
+            hide_index=True,
         )
 
-        event_label = _escape_dot(
-            row.candidate_event_types
+    with st.expander(
+        "External counterparty nodes",
+        expanded=False,
+    ):
+        st.dataframe(
+            counterparty_nodes[
+                [
+                    "counterparty_key",
+                    "display_label",
+                    "node_roles",
+                    "node_status",
+                    "customer_discovery_allowed_flag",
+                    "first_seen_date",
+                    "last_seen_date",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
         )
 
-        lines.append(
-            f'"{candidate_node_id}" '
-            f'[label="{candidate_label}", '
-            'shape="box", style="dashed"];'
+    with st.expander(
+        "Relationship evidence",
+        expanded=False,
+    ):
+        st.dataframe(
+            selected_edges[
+                [
+                    "edge_id",
+                    "source_node_key",
+                    "target_node_key",
+                    "edge_type",
+                    "relationship_status",
+                    "customer_discovery_allowed_flag",
+                    "recursive_expansion_allowed_flag",
+                    "evidence_summary",
+                    "source_event_count",
+                    "candidate_event_count",
+                    "first_seen_date",
+                    "last_seen_date",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
         )
 
-        lines.append(
-            f'"{counterparty_node_id}" -> '
-            f'"{candidate_node_id}" '
-            f'[label="{event_label}"];'
-        )
 
-    lines.append("}")
+def main() -> None:
+    """Render the unified discovery interface."""
+    st.title("Mule Network Discovery")
 
-    return "\n".join(lines)
-
-
-def build_beneficiary_graphviz_dot(
-    beneficiary_link: pd.Series,
-) -> str:
-    """Build one beneficiary-to-seed candidate graph."""
-    seed_label = _escape_dot(
-        "\n".join(
-            [
-                beneficiary_link[
-                    "seed_entity_type"
-                ],
-                beneficiary_link[
-                    "seed_entity_id"
-                ],
-                "Seed mule",
-            ]
-        )
+    st.caption(
+        "One seed-led network containing Emirates ID, "
+        "transfer-counterparty, and beneficiary evidence."
     )
 
-    candidate_label = _escape_dot(
-        "\n".join(
-            [
-                beneficiary_link[
-                    "candidate_entity_type"
-                ],
-                beneficiary_link[
-                    "candidate_entity_id"
-                ],
-                "Candidate customer",
-            ]
-        )
-    )
+    if st.sidebar.button(
+        "Reload output files",
+        type="secondary",
+    ):
+        st.cache_data.clear()
+        st.rerun()
 
-    return "\n".join(
-        [
-            "digraph beneficiary {",
-            "rankdir=LR;",
-            'graph [bgcolor="transparent", pad="0.2", '
-            'nodesep="0.8", ranksep="1.0"];',
-            'node [fontname="Arial", fontsize="11"];',
-            'edge [fontname="Arial", fontsize="9"];',
-            (
-                '"candidate" '
-                f'[label="{candidate_label}", '
-                'shape="box", style="dashed"];'
-            ),
-            (
-                '"seed" '
-                f'[label="{seed_label}", '
-                'shape="doublecircle", penwidth="2"];'
-            ),
-            (
-                '"candidate" -> "seed" '
-                '[label="Added seed account '
-                'as beneficiary", style="dashed"];'
-            ),
-            "}",
-        ]
-    )
-
-
-def render_eid_groups() -> None:
-    """Render Section 1 EID groups."""
     try:
-        groups, nodes, edges = load_eid_outputs()
+        groups, nodes, edges = (
+            load_unified_outputs()
+        )
     except FileNotFoundError as exc:
         st.error(str(exc))
         st.code(
-            "python scripts/run_eid_demo.py",
+            "python scripts/run_unified_group_demo.py",
             language="bash",
         )
         return
 
     if groups.empty:
-        st.warning("No EID groups are available.")
+        st.warning(
+            "No unified seed groups are available."
+        )
         return
-
-    summary_columns = st.columns(4)
-
-    summary_columns[0].metric(
-        "Run date",
-        sorted(
-            groups["run_date"].drop_duplicates()
-        )[-1],
-    )
-
-    summary_columns[1].metric(
-        "Groups",
-        len(groups),
-    )
-
-    summary_columns[2].metric(
-        "Entities",
-        nodes["entity_key"].nunique(),
-    )
-
-    summary_columns[3].metric(
-        "EID links",
-        len(edges),
-    )
-
-    st.subheader("Discovered EID groups")
-    st.caption(
-        "Select a row to display that group's network."
-    )
 
     groups_sorted = (
         groups
         .sort_values(
             by=[
-                "total_entity_count",
+                "total_node_count",
                 "group_id",
             ],
             ascending=[False, True],
@@ -456,54 +485,80 @@ def render_eid_groups() -> None:
         .reset_index(drop=True)
     )
 
+    st.subheader("Seed-led groups")
+
     group_table = groups_sorted[
         [
             "group_id",
-            "group_type",
-            "seed_entity_count",
-            "discovered_entity_count",
-            "total_entity_count",
-            "eid_count",
-            "edge_count",
+            "group_anchor_seed_entity_key",
+            "customer_count",
+            "counterparty_count",
+            "eid_link_count",
+            "shared_counterparty_customer_count",
+            "beneficiary_seed_link_count",
+            "customer_assessment_pending_count",
+            "counterparty_ai_pending_count",
+            "total_node_count",
+            "total_edge_count",
         ]
     ].rename(
         columns={
             "group_id": "Group ID",
-            "group_type": "Group type",
-            "seed_entity_count": "Seeds",
-            "discovered_entity_count": "Discovered",
-            "total_entity_count": "Entities",
-            "eid_count": "EIDs",
-            "edge_count": "Edges",
+            "group_anchor_seed_entity_key": (
+                "Anchor seed"
+            ),
+            "customer_count": "Customers",
+            "counterparty_count": (
+                "Counterparties"
+            ),
+            "eid_link_count": "EID links",
+            "shared_counterparty_customer_count": (
+                "Shared-counterparty links"
+            ),
+            "beneficiary_seed_link_count": (
+                "Beneficiary links"
+            ),
+            "customer_assessment_pending_count": (
+                "Customer AI pending"
+            ),
+            "counterparty_ai_pending_count": (
+                "Counterparty AI pending"
+            ),
+            "total_node_count": "Nodes",
+            "total_edge_count": "Edges",
         }
     )
 
-    selection_event = st.dataframe(
+    st.dataframe(
         group_table,
         width="stretch",
         hide_index=True,
-        key="eid_group_selection",
-        on_select="rerun",
-        selection_mode="single-row-required",
     )
 
-    selected_rows = list(
-        selection_event.selection.rows
+    group_options = (
+        groups_sorted["group_id"].tolist()
     )
 
-    selected_position = (
-        selected_rows[0]
-        if selected_rows
-        else 0
+    selected_group_id = st.selectbox(
+        "Select a group",
+        options=group_options,
+        format_func=lambda group_id: (
+            f"{group_id} — "
+            f"{groups_sorted.loc[
+                groups_sorted['group_id']
+                == group_id,
+                'group_anchor_seed_entity_key'
+            ].iloc[0]}"
+        ),
     )
 
-    selected_group = groups_sorted.iloc[
-        selected_position
-    ]
-
-    selected_group_id = selected_group[
-        "group_id"
-    ]
+    selected_group = (
+        groups_sorted.loc[
+            groups_sorted["group_id"]
+            == selected_group_id
+        ]
+        .iloc[0]
+    )
 
     selected_nodes = (
         nodes.loc[
@@ -512,9 +567,9 @@ def render_eid_groups() -> None:
         ]
         .sort_values(
             by=[
-                "seed_flag",
-                "entity_type",
-                "entity_id",
+                "expansion_source_flag",
+                "node_type",
+                "node_key",
             ],
             ascending=[False, True, True],
             kind="stable",
@@ -529,8 +584,9 @@ def render_eid_groups() -> None:
         ]
         .sort_values(
             by=[
-                "source_entity_key",
-                "target_entity_key",
+                "edge_type",
+                "source_node_key",
+                "target_node_key",
             ],
             kind="stable",
         )
@@ -539,462 +595,38 @@ def render_eid_groups() -> None:
 
     st.divider()
     st.subheader(
-        f"Selected group: {selected_group_id}"
+        f"Unified network: {selected_group_id}"
     )
 
-    group_summary_columns = st.columns(5)
+    render_group_summary(selected_group)
 
-    group_summary_columns[0].metric(
-        "Type",
-        selected_group["group_type"],
-    )
-
-    group_summary_columns[1].metric(
-        "Seeds",
-        int(
-            selected_group[
-                "seed_entity_count"
-            ]
-        ),
-    )
-
-    group_summary_columns[2].metric(
-        "Discovered",
-        int(
-            selected_group[
-                "discovered_entity_count"
-            ]
-        ),
-    )
-
-    group_summary_columns[3].metric(
-        "Entities",
-        int(
-            selected_group[
-                "total_entity_count"
-            ]
-        ),
-    )
-
-    group_summary_columns[4].metric(
-        "EID links",
-        int(selected_group["edge_count"]),
+    st.warning(
+        "This is the observed evidence graph. "
+        "Counterparty branches remain blocked until "
+        "the counterparty AI decision approves them, "
+        "and only approved mule-like customers will "
+        "become recursive expansion sources."
     )
 
     st.caption(
-        "Seed entities use a double circle. "
-        "Discovered entities use a box."
+        "Double circle: current expansion source. "
+        "Solid box: deterministic or assessment-ready "
+        "customer. Dashed box or ellipse: blocked "
+        "pending counterparty AI."
     )
 
     st.graphviz_chart(
-        build_eid_graphviz_dot(
+        build_group_graphviz_dot(
             group_nodes=selected_nodes,
             group_edges=selected_edges,
         ),
         width="stretch",
     )
 
-    with st.expander(
-        "Group entities",
-        expanded=False,
-    ):
-        st.dataframe(
-            selected_nodes[
-                [
-                    "entity_type",
-                    "entity_id",
-                    "entity_key",
-                    "seed_flag",
-                    "discovered_flag",
-                    "discovery_reason_code",
-                    "seed_sources",
-                    "entity_created_at",
-                ]
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-
-    with st.expander(
-        "EID edges",
-        expanded=False,
-    ):
-        st.dataframe(
-            selected_edges[
-                [
-                    "source_entity_key",
-                    "target_entity_key",
-                    "emirates_id_number",
-                    "seed_individual_ids",
-                    "candidate_individual_ids",
-                    "reason_code",
-                ]
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-
-
-def render_counterparty_candidates() -> None:
-    """Render Section 2 unexpanded candidate relationships."""
-    try:
-        (
-            candidates,
-            links,
-            beneficiary_links,
-        ) = load_counterparty_outputs()
-    except FileNotFoundError as exc:
-        st.error(str(exc))
-        st.code(
-            "python scripts/run_counterparty_demo.py",
-            language="bash",
-        )
-        return
-
-    summary_columns = st.columns(4)
-
-    summary_columns[0].metric(
-        "Counterparties",
-        len(candidates),
+    render_group_tables(
+        selected_nodes=selected_nodes,
+        selected_edges=selected_edges,
     )
-
-    summary_columns[1].metric(
-        "Shared-customer links",
-        len(links),
-    )
-
-    summary_columns[2].metric(
-        "Beneficiary links",
-        len(beneficiary_links),
-    )
-
-    summary_columns[3].metric(
-        "Approved expansions",
-        int(
-            candidates[
-                "expansion_allowed_flag"
-            ].sum()
-        ),
-    )
-
-    st.warning(
-        "All Section 2 counterparty relationships are "
-        "candidate evidence only. No branch is approved "
-        "for expansion."
-    )
-
-    st.subheader("Shared external counterparties")
-
-    if candidates.empty:
-        st.info(
-            "No shared-counterparty candidates "
-            "are available."
-        )
-    else:
-        candidates_sorted = (
-            candidates
-            .sort_values(
-                by=[
-                    "candidate_customer_count",
-                    "counterparty_candidate_id",
-                ],
-                ascending=[False, True],
-                kind="stable",
-            )
-            .reset_index(drop=True)
-        )
-
-        candidate_table = candidates_sorted[
-            [
-                "counterparty_candidate_id",
-                "seed_entity_key",
-                "counterparty_names",
-                "counterparty_key_type",
-                "counterparty_key_quality",
-                "candidate_customer_count",
-                "seed_event_count",
-                "candidate_event_count",
-                "candidate_status",
-            ]
-        ].rename(
-            columns={
-                "counterparty_candidate_id": (
-                    "Candidate ID"
-                ),
-                "seed_entity_key": "Seed entity",
-                "counterparty_names": (
-                    "Counterparty"
-                ),
-                "counterparty_key_type": (
-                    "Key type"
-                ),
-                "counterparty_key_quality": (
-                    "Key quality"
-                ),
-                "candidate_customer_count": (
-                    "Linked customers"
-                ),
-                "seed_event_count": (
-                    "Seed events"
-                ),
-                "candidate_event_count": (
-                    "Candidate events"
-                ),
-                "candidate_status": "Status",
-            }
-        )
-
-        selection_event = st.dataframe(
-            candidate_table,
-            width="stretch",
-            hide_index=True,
-            key="counterparty_selection",
-            on_select="rerun",
-            selection_mode="single-row-required",
-        )
-
-        selected_rows = list(
-            selection_event.selection.rows
-        )
-
-        selected_position = (
-            selected_rows[0]
-            if selected_rows
-            else 0
-        )
-
-        selected_candidate = (
-            candidates_sorted.iloc[
-                selected_position
-            ]
-        )
-
-        selected_links = (
-            links.loc[
-                (
-                    links["seed_entity_key"]
-                    == selected_candidate[
-                        "seed_entity_key"
-                    ]
-                )
-                & (
-                    links["counterparty_key"]
-                    == selected_candidate[
-                        "counterparty_key"
-                    ]
-                )
-            ]
-            .sort_values(
-                by="candidate_entity_key",
-                kind="stable",
-            )
-            .reset_index(drop=True)
-        )
-
-        st.divider()
-        st.subheader(
-            "Selected counterparty candidate"
-        )
-
-        detail_columns = st.columns(4)
-
-        detail_columns[0].metric(
-            "Seed",
-            selected_candidate[
-                "seed_entity_key"
-            ],
-        )
-
-        detail_columns[1].metric(
-            "Linked customers",
-            int(
-                selected_candidate[
-                    "candidate_customer_count"
-                ]
-            ),
-        )
-
-        detail_columns[2].metric(
-            "Key quality",
-            selected_candidate[
-                "counterparty_key_quality"
-            ],
-        )
-
-        detail_columns[3].metric(
-            "Expansion allowed",
-            "No",
-        )
-
-        st.graphviz_chart(
-            build_counterparty_graphviz_dot(
-                candidate=selected_candidate,
-                candidate_links=selected_links,
-            ),
-            width="stretch",
-        )
-
-        with st.expander(
-            "Candidate relationship evidence",
-            expanded=False,
-        ):
-            st.dataframe(
-                selected_links[
-                    [
-                        "relationship_id",
-                        "seed_entity_key",
-                        "candidate_entity_key",
-                        "counterparty_key",
-                        "seed_event_types",
-                        "candidate_event_types",
-                        "seed_event_count",
-                        "candidate_event_count",
-                        "seed_first_event_timestamp",
-                        "seed_last_event_timestamp",
-                        "candidate_first_event_timestamp",
-                        "candidate_last_event_timestamp",
-                        "candidate_status",
-                    ]
-                ],
-                width="stretch",
-                hide_index=True,
-            )
-
-    st.divider()
-    st.subheader(
-        "Customers that added a seed account "
-        "as beneficiary"
-    )
-
-    if beneficiary_links.empty:
-        st.info(
-            "No beneficiary-to-seed links "
-            "are available."
-        )
-        return
-
-    beneficiary_sorted = (
-        beneficiary_links
-        .sort_values(
-            by=[
-                "seed_entity_key",
-                "candidate_entity_key",
-            ],
-            kind="stable",
-        )
-        .reset_index(drop=True)
-    )
-
-    beneficiary_table = beneficiary_sorted[
-        [
-            "relationship_id",
-            "candidate_entity_key",
-            "seed_entity_key",
-            "beneficiary_id",
-            "beneficiary_added_timestamp",
-            "beneficiary_status",
-            "candidate_status",
-        ]
-    ].rename(
-        columns={
-            "relationship_id": "Relationship ID",
-            "candidate_entity_key": (
-                "Customer"
-            ),
-            "seed_entity_key": "Seed mule",
-            "beneficiary_id": "Beneficiary ID",
-            "beneficiary_added_timestamp": (
-                "Beneficiary added"
-            ),
-            "beneficiary_status": (
-                "Beneficiary status"
-            ),
-            "candidate_status": "Status",
-        }
-    )
-
-    beneficiary_selection = st.dataframe(
-        beneficiary_table,
-        width="stretch",
-        hide_index=True,
-        key="beneficiary_selection",
-        on_select="rerun",
-        selection_mode="single-row-required",
-    )
-
-    selected_rows = list(
-        beneficiary_selection.selection.rows
-    )
-
-    selected_position = (
-        selected_rows[0]
-        if selected_rows
-        else 0
-    )
-
-    selected_beneficiary = (
-        beneficiary_sorted.iloc[
-            selected_position
-        ]
-    )
-
-    beneficiary_summary = st.columns(3)
-
-    beneficiary_summary[0].metric(
-        "Customer",
-        selected_beneficiary[
-            "candidate_entity_key"
-        ],
-    )
-
-    beneficiary_summary[1].metric(
-        "Seed mule",
-        selected_beneficiary[
-            "seed_entity_key"
-        ],
-    )
-
-    beneficiary_summary[2].metric(
-        "Expansion allowed",
-        "No",
-    )
-
-    st.graphviz_chart(
-        build_beneficiary_graphviz_dot(
-            selected_beneficiary
-        ),
-        width="stretch",
-    )
-
-
-def main() -> None:
-    """Render the discovery interface."""
-    st.title("Mule Network Discovery")
-    st.caption(
-        "Read-only visualization of deterministic "
-        "EID groups and unexpanded counterparty "
-        "candidate relationships."
-    )
-
-    if st.sidebar.button(
-        "Reload output files",
-        type="secondary",
-    ):
-        st.cache_data.clear()
-        st.rerun()
-
-    eid_tab, counterparty_tab = st.tabs(
-        [
-            "EID groups",
-            "Counterparty candidates",
-        ]
-    )
-
-    with eid_tab:
-        render_eid_groups()
-
-    with counterparty_tab:
-        render_counterparty_candidates()
 
 
 if __name__ == "__main__":

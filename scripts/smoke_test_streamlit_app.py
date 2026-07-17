@@ -1,4 +1,4 @@
-"""Smoke test for the Streamlit discovery interface."""
+"""Smoke test for the unified Streamlit interface."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ APP_PATH = PROJECT_ROOT / "app/streamlit_app.py"
 
 
 def main() -> None:
-    """Run the interface and validate its initial state."""
+    """Validate the initial unified interface."""
     app = AppTest.from_file(
         str(APP_PATH),
         default_timeout=15,
@@ -28,21 +28,29 @@ def main() -> None:
         == "Mule Network Discovery"
     )
 
-    assert len(app.metric) >= 13
-    assert len(app.dataframe) >= 6
+    assert len(app.selectbox) == 1
+    assert len(app.metric) == 10
+    assert len(app.dataframe) >= 4
+    assert len(app.warning) == 1
 
-    warning_text = " ".join(
-        warning.value
-        for warning in app.warning
-    )
+    warning_text = app.warning[0].value
 
     assert (
-        "candidate evidence only"
+        "Counterparty branches remain blocked"
         in warning_text
     )
 
+    assert (
+        app.selectbox[0].value is not None
+    )
+
     print(
-        "Streamlit interface smoke test passed."
+        "Unified Streamlit interface smoke "
+        "test passed."
+    )
+    print(
+        f"Selected group: "
+        f"{app.selectbox[0].value}"
     )
     print(
         f"Metrics rendered: {len(app.metric)}"
@@ -52,7 +60,7 @@ def main() -> None:
         f"{len(app.dataframe)}"
     )
     print(
-        "Unexpanded candidate warning: passed"
+        "Blocked-counterparty warning: passed"
     )
 
 
