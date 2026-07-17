@@ -1,4 +1,4 @@
-"""Smoke test for the unified Streamlit interface."""
+"""Smoke test for the decision-aware Streamlit interface."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ APP_PATH = PROJECT_ROOT / "app/streamlit_app.py"
 
 
 def main() -> None:
-    """Validate the initial unified interface."""
+    """Validate the decision-aware interface."""
     app = AppTest.from_file(
         str(APP_PATH),
         default_timeout=15,
@@ -29,24 +29,22 @@ def main() -> None:
     )
 
     assert len(app.selectbox) == 1
-    assert len(app.metric) == 10
-    assert len(app.dataframe) >= 4
+    assert len(app.metric) == 12
+    assert len(app.dataframe) >= 5
     assert len(app.warning) == 1
 
     warning_text = app.warning[0].value
 
     assert (
-        "Counterparty branches remain blocked"
+        "stored feature hash matches"
         in warning_text
     )
 
-    assert (
-        app.selectbox[0].value is not None
-    )
+    assert app.selectbox[0].value is not None
 
     print(
-        "Unified Streamlit interface smoke "
-        "test passed."
+        "Decision-aware Streamlit interface "
+        "smoke test passed."
     )
     print(
         f"Selected group: "
@@ -60,7 +58,7 @@ def main() -> None:
         f"{len(app.dataframe)}"
     )
     print(
-        "Blocked-counterparty warning: passed"
+        "Incremental-decision warning: passed"
     )
 
 

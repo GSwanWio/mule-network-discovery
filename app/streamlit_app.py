@@ -1,4 +1,4 @@
-"""Unified seed-led mule network interface."""
+"""Decision-aware unified mule network interface."""
 
 from __future__ import annotations
 
@@ -11,9 +11,16 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIRECTORY = PROJECT_ROOT / "data/demo/output"
 
-GROUPS_PATH = OUTPUT_DIRECTORY / "unified_groups.csv"
-NODES_PATH = OUTPUT_DIRECTORY / "unified_group_nodes.csv"
-EDGES_PATH = OUTPUT_DIRECTORY / "unified_group_edges.csv"
+GROUPS_PATH = OUTPUT_DIRECTORY / "decision_groups.csv"
+NODES_PATH = OUTPUT_DIRECTORY / "decision_group_nodes.csv"
+EDGES_PATH = OUTPUT_DIRECTORY / "decision_group_edges.csv"
+QUEUE_PATH = OUTPUT_DIRECTORY / "expansion_queue.csv"
+APPLIED_DECISIONS_PATH = (
+    OUTPUT_DIRECTORY / "applied_decisions.csv"
+)
+IGNORED_DECISIONS_PATH = (
+    OUTPUT_DIRECTORY / "ignored_decisions.csv"
+)
 
 
 st.set_page_config(
@@ -24,7 +31,7 @@ st.set_page_config(
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
-    """Read a required persisted output."""
+    """Read one required decision output."""
     if not path.exists():
         raise FileNotFoundError(
             f"Missing output file: "
@@ -50,15 +57,25 @@ def _parse_boolean(series: pd.Series) -> pd.Series:
 
 
 @st.cache_data
-def load_unified_outputs() -> tuple[
+def load_decision_outputs() -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
     pd.DataFrame,
     pd.DataFrame,
     pd.DataFrame,
 ]:
-    """Load the unified group projection."""
+    """Load decision-aware group and queue outputs."""
     groups = _read_csv(GROUPS_PATH)
     nodes = _read_csv(NODES_PATH)
     edges = _read_csv(EDGES_PATH)
+    queue = _read_csv(QUEUE_PATH)
+    applied_decisions = _read_csv(
+        APPLIED_DECISIONS_PATH
+    )
+    ignored_decisions = _read_csv(
+        IGNORED_DECISIONS_PATH
+    )
 
     numeric_group_columns = [
         "seed_entity_count",
@@ -73,6 +90,10 @@ def load_unified_outputs() -> tuple[
         "recursive_expansion_source_count",
         "total_node_count",
         "total_edge_count",
+        "approved_suspicious_counterparty_count",
+        "suppressed_counterparty_count",
+        "mule_like_customer_count",
+        "queued_action_count",
     ]
 
     for column in numeric_group_columns:
@@ -81,27 +102,37 @@ def load_unified_outputs() -> tuple[
             errors="raise",
         ).astype(int)
 
-    node_boolean_columns = [
+    for column in [
         "customer_discovery_allowed_flag",
         "expansion_source_flag",
-    ]
-
-    for column in node_boolean_columns:
+        "decision_reuse_flag",
+    ]:
         nodes[column] = _parse_boolean(
             nodes[column]
         )
 
-    edge_boolean_columns = [
+    for column in [
         "customer_discovery_allowed_flag",
         "recursive_expansion_allowed_flag",
-    ]
-
-    for column in edge_boolean_columns:
+    ]:
         edges[column] = _parse_boolean(
             edges[column]
         )
 
-    return groups, nodes, edges
+    if "priority" in queue.columns:
+        queue["priority"] = pd.to_numeric(
+            queue["priority"],
+            errors="raise",
+        ).astype(int)
+
+    return (
+        groups,
+        nodes,
+        edges,
+        queue,
+        applied_decisions,
+        ignored_decisions,
+    )
 
 
 def _escape_dot(value: object) -> str:
@@ -123,10 +154,8 @@ def _humanize(value: object) -> str:
     )
 
 
-def _build_node_statement(
-    row: object,
-) -> str:
-    """Build one Graphviz node statement."""
+def _build_node_statement(row: object) -> str:
+    """Build one decision-aware Graphviz node."""
     node_id = _escape_dot(row.node_id)
 
     if row.node_type == "COUNTERPARTY":
@@ -137,8 +166,21 @@ def _build_node_statement(
         ]
 
         shape = "ellipse"
-        style = "dashed"
-        penwidth = "1"
+
+        if (
+            row.node_status
+            == "COUNTERPARTY_APPROVED_SUSPICIOUS"
+        ):
+            style = "solid"
+            penwidth = "2"
+        elif str(row.node_status).startswith(
+            "COUNTERPARTY_SUPPRESSED"
+        ):
+            style = "dotted"
+            penwidth = "1"
+        else:
+            style = "dashed"
+            penwidth = "1"
 
     else:
         label_lines = [
@@ -149,17 +191,30 @@ def _build_node_statement(
             ),
         ]
 
-        if row.expansion_source_flag:
+        if (
+            row.customer_assessment_status
+            == "SEED_CONFIRMED"
+        ):
             shape = "doublecircle"
             style = "solid"
             penwidth = "2"
+
         elif (
-            row.node_status
-            == "OBSERVED_PENDING_COUNTERPARTY_AI"
+            row.customer_assessment_status
+            == "MULE_LIKE"
+        ):
+            shape = "doubleoctagon"
+            style = "solid"
+            penwidth = "2"
+
+        elif (
+            row.customer_assessment_status
+            == "BLOCKED_PENDING_COUNTERPARTY_AI"
         ):
             shape = "box"
             style = "dashed"
             penwidth = "1"
+
         else:
             shape = "box"
             style = "solid"
@@ -179,47 +234,55 @@ def _build_node_statement(
 
 
 def _edge_display_properties(
-    edge_type: str,
+    row: object,
 ) -> tuple[str, str, str]:
-    """Return label, style, and direction."""
-    properties = {
-        "SAME_EMIRATES_ID": (
-            "Same Emirates ID",
-            "solid",
-            "none",
-        ),
+    """Return the edge label, style, and direction."""
+    labels = {
+        "SAME_EMIRATES_ID": "Same Emirates ID",
         "SEED_COUNTERPARTY_EVIDENCE": (
-            "Seed transfer evidence",
-            "dashed",
-            "forward",
+            "Seed transfer evidence"
         ),
         "SHARED_EXTERNAL_COUNTERPARTY": (
-            "Shared counterparty",
-            "dashed",
-            "forward",
+            "Shared counterparty"
         ),
         "BENEFICIARY_ADDED_SEED_ACCOUNT": (
-            "Added seed as beneficiary",
-            "solid",
-            "forward",
+            "Added seed as beneficiary"
         ),
     }
 
-    return properties.get(
-        edge_type,
-        (
-            _humanize(edge_type),
-            "dashed",
-            "forward",
-        ),
+    label = labels.get(
+        row.edge_type,
+        _humanize(row.edge_type),
     )
+
+    if row.edge_type == "SAME_EMIRATES_ID":
+        return label, "solid", "none"
+
+    if (
+        row.relationship_status
+        == "COUNTERPARTY_APPROVED_SUSPICIOUS"
+    ):
+        return label, "solid", "forward"
+
+    if str(row.relationship_status).startswith(
+        "COUNTERPARTY_SUPPRESSED"
+    ):
+        return label, "dotted", "forward"
+
+    if (
+        row.edge_type
+        == "BENEFICIARY_ADDED_SEED_ACCOUNT"
+    ):
+        return label, "solid", "forward"
+
+    return label, "dashed", "forward"
 
 
 def build_group_graphviz_dot(
     group_nodes: pd.DataFrame,
     group_edges: pd.DataFrame,
 ) -> str:
-    """Build one unified observed-evidence graph."""
+    """Build one unified decision-aware graph."""
     lines = [
         "digraph network {",
         "rankdir=LR;",
@@ -240,20 +303,18 @@ def build_group_graphviz_dot(
     for row in group_edges.itertuples(
         index=False
     ):
+        (
+            edge_label,
+            edge_style,
+            edge_direction,
+        ) = _edge_display_properties(row)
+
         source_node_id = _escape_dot(
             row.source_node_id
         )
 
         target_node_id = _escape_dot(
             row.target_node_id
-        )
-
-        (
-            edge_label,
-            edge_style,
-            edge_direction,
-        ) = _edge_display_properties(
-            row.edge_type
         )
 
         label = _escape_dot(edge_label)
@@ -274,7 +335,7 @@ def build_group_graphviz_dot(
 def render_group_summary(
     selected_group: pd.Series,
 ) -> None:
-    """Render selected group metrics."""
+    """Render decision-aware group metrics."""
     first_row = st.columns(6)
 
     first_row[0].metric(
@@ -321,7 +382,7 @@ def render_group_summary(
         ),
     )
 
-    second_row = st.columns(4)
+    second_row = st.columns(6)
 
     second_row[0].metric(
         "Customer AI pending",
@@ -342,25 +403,126 @@ def render_group_summary(
     )
 
     second_row[2].metric(
-        "Expansion sources",
+        "Approved suspicious",
         int(
             selected_group[
-                "recursive_expansion_source_count"
+                "approved_suspicious_counterparty_count"
             ]
         ),
     )
 
     second_row[3].metric(
-        "Total evidence edges",
-        int(selected_group["total_edge_count"]),
+        "Suppressed counterparties",
+        int(
+            selected_group[
+                "suppressed_counterparty_count"
+            ]
+        ),
+    )
+
+    second_row[4].metric(
+        "Mule-like customers",
+        int(
+            selected_group[
+                "mule_like_customer_count"
+            ]
+        ),
+    )
+
+    second_row[5].metric(
+        "Queued actions",
+        int(
+            selected_group[
+                "queued_action_count"
+            ]
+        ),
+    )
+
+
+def _filter_queue_for_group(
+    queue: pd.DataFrame,
+    group_id: str,
+) -> pd.DataFrame:
+    """Return queue items associated with one group."""
+    if queue.empty:
+        return queue.copy()
+
+    return (
+        queue.loc[
+            queue["group_ids"].map(
+                lambda value: group_id
+                in str(value).split("|")
+            )
+        ]
+        .sort_values(
+            by=[
+                "priority",
+                "action_type",
+                "subject_key",
+            ],
+            kind="stable",
+        )
+        .reset_index(drop=True)
+    )
+
+
+def _filter_decisions_for_group(
+    decisions: pd.DataFrame,
+    selected_nodes: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return decisions for subjects visible in a group."""
+    customer_keys = set(
+        selected_nodes.loc[
+            selected_nodes["node_type"]
+            == "CUSTOMER",
+            "entity_key",
+        ]
+    )
+
+    counterparty_keys = set(
+        selected_nodes.loc[
+            selected_nodes["node_type"]
+            == "COUNTERPARTY",
+            "counterparty_key",
+        ]
+    )
+
+    return (
+        decisions.loc[
+            (
+                decisions["subject_type"]
+                .eq("CUSTOMER")
+                & decisions["subject_key"].isin(
+                    customer_keys
+                )
+            )
+            | (
+                decisions["subject_type"]
+                .eq("COUNTERPARTY")
+                & decisions["subject_key"].isin(
+                    counterparty_keys
+                )
+            )
+        ]
+        .sort_values(
+            by=[
+                "subject_type",
+                "subject_key",
+            ],
+            kind="stable",
+        )
+        .reset_index(drop=True)
     )
 
 
 def render_group_tables(
     selected_nodes: pd.DataFrame,
     selected_edges: pd.DataFrame,
+    selected_queue: pd.DataFrame,
+    selected_applied_decisions: pd.DataFrame,
+    selected_ignored_decisions: pd.DataFrame,
 ) -> None:
-    """Render detailed node and edge evidence."""
+    """Render detailed graph, decision, and queue evidence."""
     customer_nodes = selected_nodes.loc[
         selected_nodes["node_type"]
         == "CUSTOMER"
@@ -370,6 +532,29 @@ def render_group_tables(
         selected_nodes["node_type"]
         == "COUNTERPARTY"
     ].copy()
+
+    st.subheader("Remaining work queue")
+
+    if selected_queue.empty:
+        st.info(
+            "No unresolved actions remain for this group."
+        )
+    else:
+        st.dataframe(
+            selected_queue[
+                [
+                    "action_type",
+                    "subject_type",
+                    "subject_key",
+                    "queue_reason",
+                    "priority",
+                    "queue_status",
+                    "trigger_decision_id",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
 
     with st.expander(
         "Customer nodes",
@@ -382,10 +567,11 @@ def render_group_tables(
                     "node_roles",
                     "node_status",
                     "customer_assessment_status",
-                    "customer_discovery_allowed_flag",
                     "expansion_source_flag",
-                    "first_seen_date",
-                    "last_seen_date",
+                    "applied_decision",
+                    "decision_reason_code",
+                    "decision_reuse_flag",
+                    "feature_snapshot_hash",
                 ]
             ],
             width="stretch",
@@ -401,11 +587,12 @@ def render_group_tables(
                 [
                     "counterparty_key",
                     "display_label",
-                    "node_roles",
                     "node_status",
                     "customer_discovery_allowed_flag",
-                    "first_seen_date",
-                    "last_seen_date",
+                    "applied_decision",
+                    "decision_reason_code",
+                    "decision_reuse_flag",
+                    "feature_snapshot_hash",
                 ]
             ],
             width="stretch",
@@ -429,22 +616,41 @@ def render_group_tables(
                     "evidence_summary",
                     "source_event_count",
                     "candidate_event_count",
-                    "first_seen_date",
-                    "last_seen_date",
                 ]
             ],
             width="stretch",
             hide_index=True,
         )
 
+    with st.expander(
+        "Reused decisions",
+        expanded=False,
+    ):
+        st.dataframe(
+            selected_applied_decisions,
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander(
+        "Ignored stale decisions",
+        expanded=False,
+    ):
+        st.dataframe(
+            selected_ignored_decisions,
+            width="stretch",
+            hide_index=True,
+        )
+
 
 def main() -> None:
-    """Render the unified discovery interface."""
+    """Render the decision-aware discovery interface."""
     st.title("Mule Network Discovery")
 
     st.caption(
-        "One seed-led network containing Emirates ID, "
-        "transfer-counterparty, and beneficiary evidence."
+        "One seed-led network combining deterministic "
+        "links, counterparty decisions, customer "
+        "assessments, and incremental expansion work."
     )
 
     if st.sidebar.button(
@@ -455,20 +661,26 @@ def main() -> None:
         st.rerun()
 
     try:
-        groups, nodes, edges = (
-            load_unified_outputs()
-        )
+        (
+            groups,
+            nodes,
+            edges,
+            queue,
+            applied_decisions,
+            ignored_decisions,
+        ) = load_decision_outputs()
+
     except FileNotFoundError as exc:
         st.error(str(exc))
         st.code(
-            "python scripts/run_unified_group_demo.py",
+            "python scripts/run_decision_demo.py",
             language="bash",
         )
         return
 
     if groups.empty:
         st.warning(
-            "No unified seed groups are available."
+            "No decision-aware groups are available."
         )
         return
 
@@ -493,13 +705,12 @@ def main() -> None:
             "group_anchor_seed_entity_key",
             "customer_count",
             "counterparty_count",
-            "eid_link_count",
-            "shared_counterparty_customer_count",
-            "beneficiary_seed_link_count",
+            "mule_like_customer_count",
+            "approved_suspicious_counterparty_count",
+            "suppressed_counterparty_count",
             "customer_assessment_pending_count",
             "counterparty_ai_pending_count",
-            "total_node_count",
-            "total_edge_count",
+            "queued_action_count",
         ]
     ].rename(
         columns={
@@ -511,12 +722,14 @@ def main() -> None:
             "counterparty_count": (
                 "Counterparties"
             ),
-            "eid_link_count": "EID links",
-            "shared_counterparty_customer_count": (
-                "Shared-counterparty links"
+            "mule_like_customer_count": (
+                "Mule-like customers"
             ),
-            "beneficiary_seed_link_count": (
-                "Beneficiary links"
+            "approved_suspicious_counterparty_count": (
+                "Approved suspicious"
+            ),
+            "suppressed_counterparty_count": (
+                "Suppressed"
             ),
             "customer_assessment_pending_count": (
                 "Customer AI pending"
@@ -524,8 +737,9 @@ def main() -> None:
             "counterparty_ai_pending_count": (
                 "Counterparty AI pending"
             ),
-            "total_node_count": "Nodes",
-            "total_edge_count": "Edges",
+            "queued_action_count": (
+                "Queued actions"
+            ),
         }
     )
 
@@ -535,20 +749,21 @@ def main() -> None:
         hide_index=True,
     )
 
-    group_options = (
-        groups_sorted["group_id"].tolist()
-    )
+    group_label_map = {
+        row.group_id: (
+            f"{row.group_id} — "
+            f"{row.group_anchor_seed_entity_key}"
+        )
+        for row in groups_sorted.itertuples(
+            index=False
+        )
+    }
 
     selected_group_id = st.selectbox(
         "Select a group",
-        options=group_options,
+        options=list(group_label_map),
         format_func=lambda group_id: (
-            f"{group_id} — "
-            f"{groups_sorted.loc[
-                groups_sorted['group_id']
-                == group_id,
-                'group_anchor_seed_entity_key'
-            ].iloc[0]}"
+            group_label_map[group_id]
         ),
     )
 
@@ -593,26 +808,45 @@ def main() -> None:
         .reset_index(drop=True)
     )
 
+    selected_queue = _filter_queue_for_group(
+        queue=queue,
+        group_id=selected_group_id,
+    )
+
+    selected_applied_decisions = (
+        _filter_decisions_for_group(
+            decisions=applied_decisions,
+            selected_nodes=selected_nodes,
+        )
+    )
+
+    selected_ignored_decisions = (
+        _filter_decisions_for_group(
+            decisions=ignored_decisions,
+            selected_nodes=selected_nodes,
+        )
+    )
+
     st.divider()
     st.subheader(
-        f"Unified network: {selected_group_id}"
+        f"Decision-aware network: "
+        f"{selected_group_id}"
     )
 
     render_group_summary(selected_group)
 
     st.warning(
-        "This is the observed evidence graph. "
-        "Counterparty branches remain blocked until "
-        "the counterparty AI decision approves them, "
-        "and only approved mule-like customers will "
-        "become recursive expansion sources."
+        "The graph reuses AI decisions only when the "
+        "stored feature hash matches the current evidence. "
+        "New or materially changed subjects remain queued."
     )
 
     st.caption(
-        "Double circle: current expansion source. "
-        "Solid box: deterministic or assessment-ready "
-        "customer. Dashed box or ellipse: blocked "
-        "pending counterparty AI."
+        "Double circle: confirmed seed. "
+        "Double octagon: mule-like expansion source. "
+        "Solid ellipse: suspicious counterparty approved. "
+        "Dotted ellipse or edge: suppressed. "
+        "Dashed branch: pending AI."
     )
 
     st.graphviz_chart(
@@ -626,6 +860,13 @@ def main() -> None:
     render_group_tables(
         selected_nodes=selected_nodes,
         selected_edges=selected_edges,
+        selected_queue=selected_queue,
+        selected_applied_decisions=(
+            selected_applied_decisions
+        ),
+        selected_ignored_decisions=(
+            selected_ignored_decisions
+        ),
     )
 
 
