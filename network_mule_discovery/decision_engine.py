@@ -79,11 +79,23 @@ CUSTOMER_STATUS_BY_DECISION = {
 DETERMINISTIC_CUSTOMER_EDGE_TYPES = frozenset({
     "SAME_EMIRATES_ID",
     "BENEFICIARY_ADDED_SEED_ACCOUNT",
+    "BENEFICIARY_ADDED_MULE_ACCOUNT",
 })
 
 COUNTERPARTY_EDGE_TYPES = frozenset({
     "SEED_COUNTERPARTY_EVIDENCE",
+    "CUSTOMER_COUNTERPARTY_EVIDENCE",
     "SHARED_EXTERNAL_COUNTERPARTY",
+})
+
+CUSTOMER_TARGET_DISCOVERY_EDGE_TYPES = frozenset({
+    "SAME_EMIRATES_ID",
+    "SHARED_EXTERNAL_COUNTERPARTY",
+})
+
+CUSTOMER_SOURCE_DISCOVERY_EDGE_TYPES = frozenset({
+    "BENEFICIARY_ADDED_SEED_ACCOUNT",
+    "BENEFICIARY_ADDED_MULE_ACCOUNT",
 })
 
 
@@ -184,6 +196,48 @@ def _hash_payload(
     return feature_snapshot_hash, payload_json
 
 
+def _get_subject_relationships(
+    edges: pd.DataFrame,
+    subject_type: str,
+    node_keys: set[str],
+) -> pd.DataFrame:
+    """
+    Select relationships that form the subject's decision evidence.
+
+    Counterparty decisions use every relationship touching the
+    counterparty.
+
+    Customer decisions use the relationship that caused the customer
+    to enter the group. Outgoing relationships discovered only after
+    approving the customer for expansion are excluded, preventing an
+    unnecessary second AI call solely because expansion occurred.
+    """
+    if subject_type == "COUNTERPARTY":
+        return edges.loc[
+            edges["source_node_key"].isin(node_keys)
+            | edges["target_node_key"].isin(node_keys)
+        ].copy()
+
+    target_evidence_mask = (
+        edges["target_node_key"].isin(node_keys)
+        & edges["edge_type"].isin(
+            CUSTOMER_TARGET_DISCOVERY_EDGE_TYPES
+        )
+    )
+
+    source_evidence_mask = (
+        edges["source_node_key"].isin(node_keys)
+        & edges["edge_type"].isin(
+            CUSTOMER_SOURCE_DISCOVERY_EDGE_TYPES
+        )
+    )
+
+    return edges.loc[
+        target_evidence_mask
+        | source_evidence_mask
+    ].copy()
+
+
 def build_subject_snapshots(
     nodes: pd.DataFrame,
     edges: pd.DataFrame,
@@ -260,14 +314,11 @@ def build_subject_snapshots(
                 current_nodes["node_key"].tolist()
             )
 
-            current_edges = edges.loc[
-                edges["source_node_key"].isin(
-                    node_keys
-                )
-                | edges["target_node_key"].isin(
-                    node_keys
-                )
-            ].copy()
+            current_edges = _get_subject_relationships(
+                edges=edges,
+                subject_type=subject_type,
+                node_keys=node_keys,
+            )
 
             group_ids = sorted(
                 current_nodes["group_id"]
