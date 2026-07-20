@@ -42,7 +42,7 @@ EXPANSION_LEDGER_COLUMNS = (
     "expansion_status",
 )
 
-FRONTIER_QUEUE_COLUMNS = (
+FRONTIER_QUEUE_REQUIRED_COLUMNS = (
     "queue_item_id",
     "run_date",
     "action_type",
@@ -54,6 +54,16 @@ FRONTIER_QUEUE_COLUMNS = (
     "queue_reason",
     "priority",
     "queue_status",
+)
+
+FRONTIER_QUEUE_COLUMNS = (
+    *FRONTIER_QUEUE_REQUIRED_COLUMNS,
+    "attempt_count",
+    "last_attempt_at",
+    "last_error_code",
+    "last_error_message",
+    "last_response_id",
+    "last_request_id",
 )
 
 
@@ -72,11 +82,13 @@ class DailyIncrementalPlan:
     """Actionable work after persisted state is reconciled."""
 
     projection: DecisionProjectionResult
+    frontier_queue: pd.DataFrame
     actionable_queue: pd.DataFrame
     applied_decision_count: int
     queued_ai_action_count: int
     queued_expansion_action_count: int
     completed_queue_item_count: int
+    failed_closed_item_count: int
 
 
 class CsvDailyStateStore:
@@ -142,11 +154,17 @@ class CsvDailyStateStore:
                 columns=list(columns)
             )
 
-        return pd.read_csv(
+        frame = pd.read_csv(
             path,
             dtype="string",
             keep_default_na=False,
         )
+
+        for column in columns:
+            if column not in frame.columns:
+                frame[column] = ""
+
+        return frame[list(columns)]
 
     def save_network_state(
         self,
@@ -325,16 +343,19 @@ class CsvDailyStateStore:
         self,
         frontier_queue: pd.DataFrame,
     ) -> None:
-        """Replace the frontier with the current unresolved work."""
+        """Replace the frontier with current unresolved work."""
         if frontier_queue.empty:
             prepared = pd.DataFrame(
                 columns=list(
                     FRONTIER_QUEUE_COLUMNS
                 )
             )
+
         else:
             missing_columns = sorted(
-                set(FRONTIER_QUEUE_COLUMNS)
+                set(
+                    FRONTIER_QUEUE_REQUIRED_COLUMNS
+                )
                 - set(frontier_queue.columns)
             )
 
@@ -344,8 +365,40 @@ class CsvDailyStateStore:
                     f"{missing_columns}"
                 )
 
+            prepared = frontier_queue.copy()
+
+            defaults = {
+                "attempt_count": "0",
+                "last_attempt_at": "",
+                "last_error_code": "",
+                "last_error_message": "",
+                "last_response_id": "",
+                "last_request_id": "",
+            }
+
+            for column, default in defaults.items():
+                if column not in prepared.columns:
+                    prepared[column] = default
+
+            prepared["queue_status"] = (
+                prepared["queue_status"]
+                .astype("string")
+                .str.strip()
+                .replace("", "READY")
+            )
+
+            prepared["attempt_count"] = (
+                pd.to_numeric(
+                    prepared["attempt_count"],
+                    errors="coerce",
+                )
+                .fillna(0)
+                .astype(int)
+                .astype("string")
+            )
+
             prepared = (
-                frontier_queue[
+                prepared[
                     list(
                         FRONTIER_QUEUE_COLUMNS
                     )
@@ -369,6 +422,108 @@ class CsvDailyStateStore:
             prepared,
             FRONTIER_QUEUE_FILENAME,
         )
+
+    def mark_frontier_items_failed(
+        self,
+        failures: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Persist selected queue items as failed closed."""
+        if failures.empty:
+            return self.load_frontier_queue()
+
+        required_columns = {
+            "queue_item_id",
+            "error_code",
+            "error_message",
+            "attempted_at",
+        }
+
+        missing_columns = sorted(
+            required_columns
+            - set(failures.columns)
+        )
+
+        if missing_columns:
+            raise ValueError(
+                "Failure records are missing columns: "
+                f"{missing_columns}"
+            )
+
+        frontier = self.load_frontier_queue()
+
+        for failure in failures.itertuples(
+            index=False
+        ):
+            mask = frontier["queue_item_id"].eq(
+                failure.queue_item_id
+            )
+
+            if not mask.any():
+                raise ValueError(
+                    "Cannot mark an unknown queue item "
+                    f"as failed: {failure.queue_item_id}"
+                )
+
+            current_attempt_count = (
+                pd.to_numeric(
+                    frontier.loc[
+                        mask,
+                        "attempt_count",
+                    ],
+                    errors="coerce",
+                )
+                .fillna(0)
+                .max()
+            )
+
+            frontier.loc[
+                mask,
+                "queue_status",
+            ] = "FAILED_CLOSED"
+
+            frontier.loc[
+                mask,
+                "attempt_count",
+            ] = str(
+                int(current_attempt_count) + 1
+            )
+
+            frontier.loc[
+                mask,
+                "last_attempt_at",
+            ] = failure.attempted_at
+
+            frontier.loc[
+                mask,
+                "last_error_code",
+            ] = failure.error_code
+
+            frontier.loc[
+                mask,
+                "last_error_message",
+            ] = failure.error_message
+
+            frontier.loc[
+                mask,
+                "last_response_id",
+            ] = getattr(
+                failure,
+                "response_id",
+                "",
+            )
+
+            frontier.loc[
+                mask,
+                "last_request_id",
+            ] = getattr(
+                failure,
+                "request_id",
+                "",
+            )
+
+        self.save_frontier_queue(frontier)
+
+        return self.load_frontier_queue()
 
     def load_snapshot(
         self,
@@ -419,16 +574,270 @@ class CsvDailyStateStore:
         return self.load_snapshot()
 
 
+def _reconcile_frontier_queue(
+    generated_queue: pd.DataFrame,
+    existing_queue: pd.DataFrame,
+) -> pd.DataFrame:
+    """Preserve failure state for unchanged queue items."""
+    if generated_queue.empty:
+        return pd.DataFrame(
+            columns=list(
+                FRONTIER_QUEUE_COLUMNS
+            )
+        )
+
+    prepared = generated_queue.copy()
+
+    defaults = {
+        "attempt_count": "0",
+        "last_attempt_at": "",
+        "last_error_code": "",
+        "last_error_message": "",
+        "last_response_id": "",
+        "last_request_id": "",
+    }
+
+    for column, default in defaults.items():
+        prepared[column] = default
+
+    if not existing_queue.empty:
+        existing_by_id = (
+            existing_queue
+            .drop_duplicates(
+                subset=["queue_item_id"],
+                keep="last",
+            )
+            .set_index("queue_item_id")
+        )
+
+        preserved_columns = [
+            "queue_status",
+            "attempt_count",
+            "last_attempt_at",
+            "last_error_code",
+            "last_error_message",
+            "last_response_id",
+            "last_request_id",
+        ]
+
+        for index, row in prepared.iterrows():
+            queue_item_id = row["queue_item_id"]
+
+            if queue_item_id not in existing_by_id.index:
+                continue
+
+            existing_row = existing_by_id.loc[
+                queue_item_id
+            ]
+
+            for column in preserved_columns:
+                prepared.at[
+                    index,
+                    column,
+                ] = existing_row[column]
+
+    return prepared[
+        list(FRONTIER_QUEUE_COLUMNS)
+    ]
+
+
+def _apply_failed_closed_status(
+    projection: DecisionProjectionResult,
+    frontier_queue: pd.DataFrame,
+) -> DecisionProjectionResult:
+    """Project persistent queue failures onto nodes and edges."""
+    groups = projection.groups.copy()
+    nodes = projection.nodes.copy()
+    edges = projection.edges.copy()
+
+    failed_items = frontier_queue.loc[
+        frontier_queue["queue_status"]
+        .astype("string")
+        .str.upper()
+        .eq("FAILED_CLOSED")
+    ]
+
+    for failure in failed_items.itertuples(
+        index=False
+    ):
+        if failure.subject_type == "COUNTERPARTY":
+            node_mask = (
+                nodes["node_type"].eq(
+                    "COUNTERPARTY"
+                )
+                & nodes["counterparty_key"].eq(
+                    failure.subject_key
+                )
+            )
+
+            node_keys = set(
+                nodes.loc[
+                    node_mask,
+                    "node_key",
+                ]
+            )
+
+            nodes.loc[
+                node_mask,
+                "node_status",
+            ] = "COUNTERPARTY_AI_FAILED_CLOSED"
+
+            nodes.loc[
+                node_mask,
+                "customer_discovery_allowed_flag",
+            ] = False
+
+            nodes.loc[
+                node_mask,
+                "expansion_source_flag",
+            ] = False
+
+            nodes.loc[
+                node_mask,
+                "decision_reason_code",
+            ] = failure.last_error_code
+
+            edge_mask = (
+                edges["source_node_key"].isin(
+                    node_keys
+                )
+                | edges["target_node_key"].isin(
+                    node_keys
+                )
+            )
+
+            edges.loc[
+                edge_mask,
+                "relationship_status",
+            ] = "COUNTERPARTY_AI_FAILED_CLOSED"
+
+            edges.loc[
+                edge_mask,
+                "customer_discovery_allowed_flag",
+            ] = False
+
+            edges.loc[
+                edge_mask,
+                "recursive_expansion_allowed_flag",
+            ] = False
+
+        elif failure.subject_type == "CUSTOMER":
+            node_mask = (
+                nodes["node_type"].eq("CUSTOMER")
+                & nodes["entity_key"].eq(
+                    failure.subject_key
+                )
+            )
+
+            nodes.loc[
+                node_mask,
+                "node_status",
+            ] = "CUSTOMER_AI_FAILED_CLOSED"
+
+            nodes.loc[
+                node_mask,
+                "customer_assessment_status",
+            ] = "AI_FAILED_CLOSED"
+
+            nodes.loc[
+                node_mask,
+                "customer_discovery_allowed_flag",
+            ] = False
+
+            nodes.loc[
+                node_mask,
+                "expansion_source_flag",
+            ] = False
+
+            nodes.loc[
+                node_mask,
+                "decision_reason_code",
+            ] = failure.last_error_code
+
+    for index, group in groups.iterrows():
+        group_id = group["group_id"]
+
+        group_nodes = nodes.loc[
+            nodes["group_id"].eq(group_id)
+        ]
+
+        group_frontier = frontier_queue.loc[
+            frontier_queue["group_ids"].map(
+                lambda value: (
+                    group_id
+                    in str(value).split("|")
+                )
+            )
+        ]
+
+        groups.at[
+            index,
+            "customer_assessment_pending_count",
+        ] = int(
+            group_nodes[
+                "customer_assessment_status"
+            ]
+            .eq("PENDING_CUSTOMER_AI")
+            .sum()
+        )
+
+        groups.at[
+            index,
+            "counterparty_ai_pending_count",
+        ] = int(
+            group_nodes["node_status"]
+            .eq(
+                "OBSERVED_PENDING_COUNTERPARTY_AI"
+            )
+            .sum()
+        )
+
+        groups.at[
+            index,
+            "recursive_expansion_source_count",
+        ] = int(
+            group_nodes[
+                "expansion_source_flag"
+            ].sum()
+        )
+
+        groups.at[
+            index,
+            "queued_action_count",
+        ] = int(
+            group_frontier[
+                "queue_status"
+            ]
+            .astype("string")
+            .str.upper()
+            .eq("READY")
+            .sum()
+        )
+
+    return DecisionProjectionResult(
+        groups=groups,
+        nodes=nodes,
+        edges=edges,
+        subject_snapshots=(
+            projection.subject_snapshots
+        ),
+        applied_decisions=(
+            projection.applied_decisions
+        ),
+        ignored_decisions=(
+            projection.ignored_decisions
+        ),
+        expansion_queue=(
+            projection.expansion_queue
+        ),
+    )
+
+
 def build_incremental_daily_plan(
     state_store: CsvDailyStateStore,
     run_date: date | str,
 ) -> DailyIncrementalPlan:
-    """
-    Reconcile current evidence with persisted decisions and expansions.
-
-    Unchanged decisions are reused by matching feature hashes. Completed
-    discovery actions are removed by their stable queue item IDs.
-    """
+    """Reconcile current evidence with persistent daily state."""
     resolved_run_date = parse_run_date(
         run_date
     )
@@ -453,7 +862,7 @@ def build_incremental_daily_plan(
         ]
     )
 
-    actionable_queue = (
+    generated_queue = (
         projection.expansion_queue.loc[
             ~projection.expansion_queue[
                 "queue_item_id"
@@ -463,14 +872,37 @@ def build_incremental_daily_plan(
         .reset_index(drop=True)
     )
 
+    frontier_queue = _reconcile_frontier_queue(
+        generated_queue=generated_queue,
+        existing_queue=snapshot.frontier_queue,
+    )
+
     state_store.save_frontier_queue(
-        actionable_queue
+        frontier_queue
+    )
+
+    frontier_queue = (
+        state_store.load_frontier_queue()
+    )
+
+    projection = _apply_failed_closed_status(
+        projection=projection,
+        frontier_queue=frontier_queue,
+    )
+
+    actionable_queue = (
+        frontier_queue.loc[
+            frontier_queue["queue_status"]
+            .astype("string")
+            .str.upper()
+            .eq("READY")
+        ]
+        .copy()
+        .reset_index(drop=True)
     )
 
     queued_ai_action_count = int(
-        actionable_queue[
-            "action_type"
-        ]
+        actionable_queue["action_type"]
         .isin(
             [
                 "RUN_COUNTERPARTY_AI",
@@ -481,17 +913,24 @@ def build_incremental_daily_plan(
     )
 
     queued_expansion_action_count = int(
-        actionable_queue[
-            "action_type"
-        ]
+        actionable_queue["action_type"]
         .eq(
             "DISCOVER_CUSTOMER_RELATIONSHIPS"
         )
         .sum()
     )
 
+    failed_closed_item_count = int(
+        frontier_queue["queue_status"]
+        .astype("string")
+        .str.upper()
+        .eq("FAILED_CLOSED")
+        .sum()
+    )
+
     return DailyIncrementalPlan(
         projection=projection,
+        frontier_queue=frontier_queue,
         actionable_queue=actionable_queue,
         applied_decision_count=len(
             projection.applied_decisions
@@ -504,5 +943,8 @@ def build_incremental_daily_plan(
         ),
         completed_queue_item_count=len(
             completed_queue_ids
+        ),
+        failed_closed_item_count=(
+            failed_closed_item_count
         ),
     )

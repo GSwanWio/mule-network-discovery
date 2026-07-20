@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -78,6 +79,7 @@ class ApproveChangedCounterpartyAdapter:
         subject_type: str,
         subject_key: str,
         feature_snapshot_hash: str,
+        feature_payload_json: str,
         run_date: date,
         round_number: int,
         sequence_number: int,
@@ -89,6 +91,24 @@ class ApproveChangedCounterpartyAdapter:
             subject_key
             == self.expected_counterparty_key
         )
+
+        feature_payload = json.loads(
+            feature_payload_json
+        )
+
+        assert (
+            feature_payload["subject_type"]
+            == subject_type
+        )
+
+        assert (
+            feature_payload["subject_key"]
+            == subject_key
+        )
+
+        assert feature_payload[
+            "relationships"
+        ]
 
         self.calls.append(
             (
@@ -634,6 +654,10 @@ def main() -> None:
 
     print(
         "Evidence hashes changed after decision: 0"
+    )
+
+    print(
+        "Evidence payload delivered to adapter: passed"
     )
 
 

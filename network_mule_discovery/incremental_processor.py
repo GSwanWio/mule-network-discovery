@@ -1,9 +1,9 @@
-"""Execute only newly queued incremental AI decisions."""
+"""Execute newly queued incremental AI decisions safely."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Protocol
 
 import pandas as pd
@@ -16,8 +16,11 @@ from network_mule_discovery.daily_state import (
 from network_mule_discovery.decision_engine import (
     DECISION_REQUIRED_COLUMNS,
     apply_persisted_decisions,
+    prepare_decisions,
 )
-from network_mule_discovery.schemas import parse_run_date
+from network_mule_discovery.schemas import (
+    parse_run_date,
+)
 from network_mule_discovery.unified_group_builder import (
     UnifiedGroupResult,
 )
@@ -30,7 +33,7 @@ AI_ACTION_TYPES = frozenset({
 
 
 class IncrementalDecisionAdapter(Protocol):
-    """Structured decision adapter used by incremental processing."""
+    """Structured decision adapter."""
 
     def decide(
         self,
@@ -38,21 +41,38 @@ class IncrementalDecisionAdapter(Protocol):
         subject_type: str,
         subject_key: str,
         feature_snapshot_hash: str,
+        feature_payload_json: str,
         run_date: date,
         round_number: int,
         sequence_number: int,
     ) -> dict[str, str]:
-        """Return one validated structured decision."""
+        """Return one structured decision."""
 
 
 @dataclass(frozen=True)
 class IncrementalAiExecutionResult:
-    """Outputs from one bounded incremental AI execution."""
+    """Outputs from one bounded AI execution."""
 
     initial_plan: DailyIncrementalPlan
     executed_actions: pd.DataFrame
     generated_decisions: pd.DataFrame
     refreshed_plan: DailyIncrementalPlan
+
+
+def _adapter_metadata(
+    decision_adapter: object,
+) -> dict[str, object]:
+    """Read optional trace metadata from an adapter."""
+    metadata = getattr(
+        decision_adapter,
+        "last_call_metadata",
+        None,
+    )
+
+    if isinstance(metadata, dict):
+        return metadata
+
+    return {}
 
 
 def execute_incremental_ai_actions(
@@ -62,13 +82,7 @@ def execute_incremental_ai_actions(
     run_date: date | str,
     max_ai_calls: int,
 ) -> IncrementalAiExecutionResult:
-    """
-    Execute newly queued AI actions and persist their decisions.
-
-    Relationship discovery and recursive expansion are deliberately
-    excluded from this function. A new AI decision may expose customer
-    assessment work, which remains in the refreshed frontier queue.
-    """
+    """Execute AI items independently and fail closed per item."""
     if max_ai_calls < 0:
         raise ValueError(
             "max_ai_calls cannot be negative."
@@ -107,7 +121,53 @@ def execute_incremental_ai_actions(
         .reset_index(drop=True)
     )
 
-    decision_rows: list[dict[str, str]] = []
+    subject_payloads = (
+        initial_plan
+        .projection
+        .subject_snapshots[
+            [
+                "subject_type",
+                "subject_key",
+                "feature_snapshot_hash",
+                "feature_payload_json",
+            ]
+        ]
+        .copy()
+    )
+
+    selected_actions = selected_actions.merge(
+        subject_payloads,
+        how="left",
+        on=[
+            "subject_type",
+            "subject_key",
+            "feature_snapshot_hash",
+        ],
+        validate="one_to_one",
+    )
+
+    if (
+        not selected_actions.empty
+        and selected_actions[
+            "feature_payload_json"
+        ].isna().any()
+    ):
+        raise RuntimeError(
+            "An AI queue item has no matching "
+            "feature evidence payload."
+        )
+
+    decision_rows: list[
+        dict[str, object]
+    ] = []
+
+    execution_rows: list[
+        dict[str, object]
+    ] = []
+
+    failure_rows: list[
+        dict[str, object]
+    ] = []
 
     for sequence_number, row in enumerate(
         selected_actions.itertuples(
@@ -115,18 +175,137 @@ def execute_incremental_ai_actions(
         ),
         start=1,
     ):
-        decision = decision_adapter.decide(
-            subject_type=row.subject_type,
-            subject_key=row.subject_key,
-            feature_snapshot_hash=(
-                row.feature_snapshot_hash
-            ),
-            run_date=resolved_run_date,
-            round_number=1,
-            sequence_number=sequence_number,
-        )
+        attempted_at = datetime.now(
+            timezone.utc
+        ).isoformat()
 
-        decision_rows.append(decision)
+        execution_record = row._asdict()
+
+        try:
+            candidate_decision = (
+                decision_adapter.decide(
+                    subject_type=row.subject_type,
+                    subject_key=row.subject_key,
+                    feature_snapshot_hash=(
+                        row.feature_snapshot_hash
+                    ),
+                    feature_payload_json=(
+                        row.feature_payload_json
+                    ),
+                    run_date=resolved_run_date,
+                    round_number=1,
+                    sequence_number=(
+                        sequence_number
+                    ),
+                )
+            )
+
+            validated = prepare_decisions(
+                pd.DataFrame(
+                    [candidate_decision]
+                )
+            )
+
+            if len(validated) != 1:
+                raise RuntimeError(
+                    "The adapter did not return exactly "
+                    "one valid decision."
+                )
+
+            decision_record = {
+                column: validated.iloc[0][column]
+                for column in (
+                    DECISION_REQUIRED_COLUMNS
+                )
+            }
+
+            decision_rows.append(
+                decision_record
+            )
+
+            metadata = _adapter_metadata(
+                decision_adapter
+            )
+
+            execution_record.update(
+                {
+                    "execution_status": "COMPLETED",
+                    "generated_decision_id": (
+                        decision_record[
+                            "decision_id"
+                        ]
+                    ),
+                    "error_code": "",
+                    "error_message": "",
+                    "response_id": metadata.get(
+                        "response_id",
+                        "",
+                    ),
+                    "request_id": metadata.get(
+                        "request_id",
+                        "",
+                    ),
+                }
+            )
+
+        except Exception as exc:
+            error_code = str(
+                getattr(
+                    exc,
+                    "code",
+                    "DECISION_EXECUTION_ERROR",
+                )
+            )
+
+            error_message = str(exc)[:1000]
+
+            response_id = str(
+                getattr(
+                    exc,
+                    "response_id",
+                    "",
+                )
+                or ""
+            )
+
+            request_id = str(
+                getattr(
+                    exc,
+                    "request_id",
+                    "",
+                )
+                or ""
+            )
+
+            execution_record.update(
+                {
+                    "execution_status": (
+                        "FAILED_CLOSED"
+                    ),
+                    "generated_decision_id": "",
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "response_id": response_id,
+                    "request_id": request_id,
+                }
+            )
+
+            failure_rows.append(
+                {
+                    "queue_item_id": (
+                        row.queue_item_id
+                    ),
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "attempted_at": attempted_at,
+                    "response_id": response_id,
+                    "request_id": request_id,
+                }
+            )
+
+        execution_rows.append(
+            execution_record
+        )
 
     generated_decisions = pd.DataFrame(
         decision_rows,
@@ -134,6 +313,23 @@ def execute_incremental_ai_actions(
             DECISION_REQUIRED_COLUMNS
         ),
     )
+
+    failures = pd.DataFrame(
+        failure_rows,
+        columns=[
+            "queue_item_id",
+            "error_code",
+            "error_message",
+            "attempted_at",
+            "response_id",
+            "request_id",
+        ],
+    )
+
+    if not failures.empty:
+        state_store.mark_frontier_items_failed(
+            failures
+        )
 
     if generated_decisions.empty:
         decision_store = (
@@ -171,49 +367,41 @@ def execute_incremental_ai_actions(
         )
     )
 
-    executed_actions = selected_actions.copy()
+    state_store.save_network_state(
+        network=UnifiedGroupResult(
+            groups=(
+                refreshed_plan.projection.groups
+            ),
+            nodes=(
+                refreshed_plan.projection.nodes
+            ),
+            edges=(
+                refreshed_plan.projection.edges
+            ),
+        ),
+        run_date=resolved_run_date,
+    )
+
+    executed_actions = pd.DataFrame(
+        execution_rows
+    )
 
     if executed_actions.empty:
-        executed_actions[
-            "execution_status"
-        ] = pd.Series(dtype="string")
-
-        executed_actions[
-            "generated_decision_id"
-        ] = pd.Series(dtype="string")
-
-    else:
-        decision_id_map = {
-            (
-                row.subject_type,
-                row.subject_key,
-                row.feature_snapshot_hash,
-            ): row.decision_id
-            for row in (
-                generated_decisions.itertuples(
-                    index=False
-                )
-            )
-        }
-
-        executed_actions[
-            "execution_status"
-        ] = "COMPLETED"
-
-        executed_actions[
-            "generated_decision_id"
-        ] = executed_actions.apply(
-            lambda row: decision_id_map[
-                (
-                    row["subject_type"],
-                    row["subject_key"],
-                    row[
-                        "feature_snapshot_hash"
-                    ],
-                )
-            ],
-            axis=1,
+        executed_actions = (
+            selected_actions.copy()
         )
+
+        for column in [
+            "execution_status",
+            "generated_decision_id",
+            "error_code",
+            "error_message",
+            "response_id",
+            "request_id",
+        ]:
+            executed_actions[column] = (
+                pd.Series(dtype="string")
+            )
 
     return IncrementalAiExecutionResult(
         initial_plan=initial_plan,
