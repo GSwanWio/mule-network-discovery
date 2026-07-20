@@ -180,6 +180,7 @@ def execute_incremental_ai_actions(
         ).isoformat()
 
         execution_record = row._asdict()
+        execution_record["attempted_at"] = attempted_at
 
         try:
             candidate_decision = (
