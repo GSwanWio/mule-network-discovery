@@ -129,25 +129,72 @@ def _stable_id(
     return f"{prefix}{digest}"
 
 
-def _json_value(value: object) -> object:
-    """Convert pandas and numpy scalar values to JSON values."""
+NUMERIC_FEATURE_COLUMNS = frozenset({
+    "source_event_count",
+    "candidate_event_count",
+})
+
+
+def _is_missing_value(
+    value: object,
+) -> bool:
+    """Return whether one scalar feature value is missing."""
     if value is None:
-        return None
+        return True
 
     try:
-        if pd.isna(value):
-            return None
-    except TypeError:
-        pass
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _canonical_json_value(
+    column: str,
+    value: object,
+) -> object:
+    """
+    Normalize equivalent CSV and in-memory feature values.
+
+    Examples:
+    - None, pandas NA and blank strings become null.
+    - Numeric count values such as 2, 2.0 and "2" become 2.
+    - Other strings are trimmed but remain strings.
+    """
+    if _is_missing_value(value):
+        return None
 
     if hasattr(value, "item"):
         try:
             value = value.item()
-        except ValueError:
+        except (TypeError, ValueError):
             pass
 
     if isinstance(value, (date, pd.Timestamp)):
         return str(value)
+
+    if isinstance(value, str):
+        value = value.strip()
+
+        if not value:
+            return None
+
+    if column in NUMERIC_FEATURE_COLUMNS:
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise SchemaValidationError(
+                "Feature column "
+                f"{column} contains a non-numeric value: "
+                f"{value!r}"
+            ) from exc
+
+        if numeric_value.is_integer():
+            return int(numeric_value)
+
+        return numeric_value
+
+    if isinstance(value, str):
+        return value
 
     return value
 
@@ -163,7 +210,10 @@ def _canonical_records(
         orient="records"
     ):
         record = {
-            key: _json_value(value)
+            key: _canonical_json_value(
+                column=key,
+                value=value,
+            )
             for key, value in source_record.items()
         }
 
@@ -177,7 +227,6 @@ def _canonical_records(
             separators=(",", ":"),
         ),
     )
-
 
 def _hash_payload(
     payload: dict[str, object],
@@ -264,23 +313,22 @@ def build_subject_snapshots(
     ]
 
     node_payload_columns = [
-        "group_id",
         "node_key",
         "node_type",
+        "entity_type",
+        "entity_id",
+        "entity_key",
+        "counterparty_key",
+        "display_label",
         "node_roles",
-        "node_status",
-        "customer_assessment_status",
-        "customer_discovery_allowed_flag",
-        "expansion_source_flag",
     ]
 
     edge_payload_columns = [
-        "group_id",
         "source_node_key",
         "target_node_key",
         "edge_type",
-        "relationship_status",
         "evidence_key",
+        "evidence_summary",
         "source_event_count",
         "candidate_event_count",
     ]
