@@ -17,13 +17,18 @@ from network_mule_discovery.daily_ai_runner import (
     load_daily_ai_settings,
     run_controlled_daily_ai,
 )
+from network_mule_discovery.daily_state_preflight import (
+    DailyStatePreflightError,
+    validate_daily_state_preflight,
+)
 
 
 def parse_arguments() -> argparse.Namespace:
     """Parse daily runner arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            "Execute a bounded daily AI decision cycle."
+            "Validate state and execute a bounded "
+            "daily AI decision cycle."
         )
     )
 
@@ -39,6 +44,15 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help=(
+            "Validate persisted network state without "
+            "planning or AI execution."
+        ),
+    )
+
+    parser.add_argument(
         "--execute-live-ai",
         action="store_true",
         help=(
@@ -51,8 +65,44 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Run planning or explicitly authorized live AI."""
+    """Validate state, then plan or execute live AI."""
     arguments = parse_arguments()
+
+    try:
+        preflight = (
+            validate_daily_state_preflight(
+                arguments.state_directory
+            )
+        )
+
+    except DailyStatePreflightError as exc:
+        raise SystemExit(
+            f"Daily state preflight failed: {exc}"
+        ) from exc
+
+    print("Daily state preflight passed.")
+    print(
+        f"State directory: "
+        f"{preflight.state_directory}"
+    )
+    print(
+        f"Persisted groups: "
+        f"{preflight.group_count}"
+    )
+    print(
+        f"Persisted nodes: "
+        f"{preflight.node_count}"
+    )
+    print(
+        f"Persisted edges: "
+        f"{preflight.edge_count}"
+    )
+
+    if arguments.preflight_only:
+        print("Planning executed: False")
+        print("Live AI calls executed: 0")
+        return
+
     settings = load_daily_ai_settings()
 
     if (
