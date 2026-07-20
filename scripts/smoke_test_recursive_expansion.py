@@ -96,7 +96,25 @@ def main() -> None:
 
     assert len(
         first_result.generated_decisions
-    ) == 16
+    ) == 17
+
+    assert (
+        first_result.generated_decisions[
+            "decision_id"
+        ].is_unique
+    )
+
+    assert not (
+        first_result.generated_decisions
+        .duplicated(
+            subset=[
+                "subject_type",
+                "subject_key",
+                "feature_snapshot_hash",
+            ]
+        )
+        .any()
+    )
 
     assert len(
         first_result.expansion_ledger
