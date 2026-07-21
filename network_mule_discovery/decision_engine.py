@@ -287,17 +287,147 @@ def _get_subject_relationships(
     ].copy()
 
 
+def _prepare_supplemental_subject_payloads(
+    supplemental_subject_payloads: pd.DataFrame | None,
+) -> dict[tuple[str, str], dict[str, object]]:
+    """Validate optional production-derived subject evidence."""
+    if supplemental_subject_payloads is None:
+        return {}
+
+    required_columns = {
+        "subject_type",
+        "subject_key",
+        "feature_payload_json",
+    }
+
+    missing_columns = sorted(
+        required_columns
+        - set(supplemental_subject_payloads.columns)
+    )
+
+    if missing_columns:
+        raise SchemaValidationError(
+            "supplemental_subject_payloads is missing columns: "
+            f"{missing_columns}"
+        )
+
+    prepared = supplemental_subject_payloads[
+        [
+            "subject_type",
+            "subject_key",
+            "feature_payload_json",
+        ]
+    ].copy()
+
+    for column in (
+        "subject_type",
+        "subject_key",
+        "feature_payload_json",
+    ):
+        prepared[column] = (
+            prepared[column]
+            .astype("string")
+            .str.strip()
+        )
+
+        if (
+            prepared[column].isna()
+            | prepared[column].eq("")
+        ).any():
+            raise SchemaValidationError(
+                "supplemental_subject_payloads."
+                f"{column} contains null or blank values."
+            )
+
+    prepared["subject_type"] = prepared[
+        "subject_type"
+    ].str.upper()
+
+    duplicate_mask = prepared.duplicated(
+        subset=[
+            "subject_type",
+            "subject_key",
+        ],
+        keep=False,
+    )
+
+    if duplicate_mask.any():
+        duplicates = (
+            prepared.loc[
+                duplicate_mask,
+                [
+                    "subject_type",
+                    "subject_key",
+                ],
+            ]
+            .drop_duplicates()
+            .to_dict(orient="records")
+        )
+
+        raise SchemaValidationError(
+            "supplemental_subject_payloads contains duplicate "
+            f"subjects: {duplicates}"
+        )
+
+    payload_map: dict[
+        tuple[str, str],
+        dict[str, object],
+    ] = {}
+
+    for row in prepared.itertuples(index=False):
+        try:
+            payload = json.loads(
+                row.feature_payload_json
+            )
+        except json.JSONDecodeError as exc:
+            raise SchemaValidationError(
+                "supplemental_subject_payloads contains invalid "
+                f"JSON for {row.subject_type}|{row.subject_key}."
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise SchemaValidationError(
+                "Supplemental subject evidence must be a JSON "
+                f"object for {row.subject_type}|{row.subject_key}."
+            )
+
+        if payload.get("subject_type") != row.subject_type:
+            raise SchemaValidationError(
+                "Supplemental subject_type does not match its "
+                f"payload for {row.subject_type}|{row.subject_key}."
+            )
+
+        if payload.get("subject_key") != row.subject_key:
+            raise SchemaValidationError(
+                "Supplemental subject_key does not match its "
+                f"payload for {row.subject_type}|{row.subject_key}."
+            )
+
+        payload_map[(row.subject_type, row.subject_key)] = payload
+
+    return payload_map
+
+
 def build_subject_snapshots(
     nodes: pd.DataFrame,
     edges: pd.DataFrame,
+    supplemental_subject_payloads: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Build global customer and counterparty feature snapshots.
 
-    New relationships change the hash and therefore invalidate an older
-    cached decision.
+    Graph evidence is always included. Optional neutral behavioral or
+    registry evidence is combined with the graph evidence before the
+    reusable feature hash is calculated.
     """
+    supplemental_payload_map = (
+        _prepare_supplemental_subject_payloads(
+            supplemental_subject_payloads
+        )
+    )
+
     subject_records: list[dict[str, object]] = []
+    observed_subjects: set[tuple[str, str]] = set()
 
     subject_definitions = [
         (
@@ -353,6 +483,12 @@ def build_subject_snapshots(
         )
 
         for subject_key in subject_keys:
+            subject_identity = (
+                subject_type,
+                str(subject_key),
+            )
+            observed_subjects.add(subject_identity)
+
             current_nodes = subject_nodes.loc[
                 subject_nodes[subject_column]
                 == subject_key
@@ -374,7 +510,7 @@ def build_subject_snapshots(
                 .tolist()
             )
 
-            payload = {
+            graph_payload = {
                 "subject_type": subject_type,
                 "subject_key": subject_key,
                 "nodes": _canonical_records(
@@ -386,6 +522,24 @@ def build_subject_snapshots(
                     columns=edge_payload_columns,
                 ),
             }
+
+            supplemental_payload = (
+                supplemental_payload_map.get(
+                    subject_identity
+                )
+            )
+
+            if supplemental_payload is None:
+                payload = graph_payload
+                supplemental_evidence_included = False
+            else:
+                payload = {
+                    **graph_payload,
+                    "behavioral_evidence": (
+                        supplemental_payload
+                    ),
+                }
+                supplemental_evidence_included = True
 
             (
                 feature_snapshot_hash,
@@ -408,11 +562,25 @@ def build_subject_snapshots(
                     "relationship_count": len(
                         current_edges
                     ),
+                    "supplemental_evidence_included": (
+                        supplemental_evidence_included
+                    ),
                     "feature_payload_json": (
                         payload_json
                     ),
                 }
             )
+
+    unobserved_supplemental_subjects = sorted(
+        set(supplemental_payload_map)
+        - observed_subjects
+    )
+
+    if unobserved_supplemental_subjects:
+        raise SchemaValidationError(
+            "Supplemental evidence was supplied for unobserved "
+            f"subjects: {unobserved_supplemental_subjects}"
+        )
 
     return (
         pd.DataFrame(subject_records)
@@ -594,6 +762,7 @@ def apply_persisted_decisions(
     unified_result: UnifiedGroupResult,
     decisions: pd.DataFrame,
     run_date: date | str,
+    supplemental_subject_payloads: pd.DataFrame | None = None,
 ) -> DecisionProjectionResult:
     """Apply reusable decisions and queue only unresolved work."""
     resolved_run_date = parse_run_date(run_date)
@@ -605,6 +774,9 @@ def apply_persisted_decisions(
     subject_snapshots = build_subject_snapshots(
         nodes=nodes,
         edges=edges,
+        supplemental_subject_payloads=(
+            supplemental_subject_payloads
+        ),
     )
 
     prepared_decisions = prepare_decisions(
