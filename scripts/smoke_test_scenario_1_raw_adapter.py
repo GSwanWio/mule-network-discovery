@@ -123,7 +123,19 @@ def main() -> None:
         assert len(first_inputs.seed_mules) == 1
         assert len(first_inputs.customer_identity) == 105
         assert len(first_inputs.seed_mule_events) == 1
-        assert len(first_inputs.counterparty_events) == 683
+        assert len(first_inputs.counterparty_events) == 680
+
+        event_timestamps = pd.to_datetime(
+            first_inputs.counterparty_events[
+                "event_timestamp"
+            ],
+            errors="raise",
+        )
+
+        assert event_timestamps.max() < (
+            pd.Timestamp(RUN_DATE)
+            + pd.Timedelta(days=1)
+        )
 
         data_source = CsvCounterpartyNetworkDataSource(
             seed_mule_pool_path=(

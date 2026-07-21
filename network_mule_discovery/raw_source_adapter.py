@@ -40,6 +40,21 @@ class RawSourceAdapterError(RuntimeError):
     """Raw source data cannot be converted safely."""
 
 
+
+
+@dataclass(frozen=True)
+class RawDiscoverySources:
+    """Validated production-shaped source frames."""
+
+    seed_mule_pool: pd.DataFrame
+    customer_identity: pd.DataFrame
+    customer_accounts: pd.DataFrame
+    local_inward_payments: pd.DataFrame
+    local_outward_payments: pd.DataFrame
+    retail_beneficiaries: pd.DataFrame
+    sme_beneficiaries: pd.DataFrame
+
+
 @dataclass(frozen=True)
 class CanonicalDiscoveryInputs:
     """Canonical frames consumed by the existing discovery pipeline."""
@@ -149,6 +164,31 @@ def _read_contract_csv(
             )
 
     return frame
+
+
+def load_raw_discovery_sources(
+    source_directory: Path | str,
+) -> RawDiscoverySources:
+    """Load and validate all production-shaped source CSVs."""
+    resolved_source_directory = Path(source_directory)
+
+    loaded = {
+        contract.filename: _read_contract_csv(
+            resolved_source_directory,
+            contract,
+        )
+        for contract in SCENARIO_1_SOURCE_CONTRACTS
+    }
+
+    return RawDiscoverySources(
+        seed_mule_pool=loaded["seed_mule_pool.csv"],
+        customer_identity=loaded["customer_identity.csv"],
+        customer_accounts=loaded["customer_account_master.csv"],
+        local_inward_payments=loaded["local_inward_payments.csv"],
+        local_outward_payments=loaded["local_outward_payments.csv"],
+        retail_beneficiaries=loaded["retail_beneficiary_master.csv"],
+        sme_beneficiaries=loaded["sme_beneficiary_master.csv"],
+    )
 
 
 def _customer_account_lookup(
@@ -368,6 +408,42 @@ def _completed_mask(frame: pd.DataFrame) -> pd.Series:
     )
 
 
+def _on_or_before_run_date_mask(
+    frame: pd.DataFrame,
+    timestamp_column: str,
+    run_date: date,
+    dataset_name: str,
+) -> pd.Series:
+    """Exclude invalid and future-dated source records."""
+    timestamps = pd.to_datetime(
+        frame[timestamp_column],
+        errors="coerce",
+    )
+
+    if timestamps.isna().any():
+        invalid_values = (
+            frame.loc[
+                timestamps.isna(),
+                timestamp_column,
+            ]
+            .astype("string")
+            .drop_duplicates()
+            .tolist()
+        )
+
+        raise RawSourceAdapterError(
+            f"{dataset_name}.{timestamp_column} contains "
+            f"invalid timestamps: {invalid_values}"
+        )
+
+    exclusive_cutoff = (
+        pd.Timestamp(run_date)
+        + pd.Timedelta(days=1)
+    )
+
+    return timestamps.lt(exclusive_cutoff)
+
+
 def _build_outward_events(
     outward: pd.DataFrame,
     accounts: pd.DataFrame,
@@ -376,6 +452,12 @@ def _build_outward_events(
 ) -> pd.DataFrame:
     completed = outward.loc[
         _completed_mask(outward)
+        & _on_or_before_run_date_mask(
+            frame=outward,
+            timestamp_column="transaction_timestamp",
+            run_date=run_date,
+            dataset_name="local_outward_payments",
+        )
     ].copy()
 
     account_enrichment = accounts.rename(
@@ -555,6 +637,12 @@ def _build_inward_events(
 ) -> pd.DataFrame:
     completed = inward.loc[
         _completed_mask(inward)
+        & _on_or_before_run_date_mask(
+            frame=inward,
+            timestamp_column="transaction_timestamp",
+            run_date=run_date,
+            dataset_name="local_inward_payments",
+        )
     ].copy()
 
     account_enrichment = accounts.rename(
@@ -657,6 +745,15 @@ def _build_beneficiary_events(
     accounts: pd.DataFrame,
     run_date: date,
 ) -> pd.DataFrame:
+    eligible_beneficiaries = beneficiaries.loc[
+        _on_or_before_run_date_mask(
+            frame=beneficiaries,
+            timestamp_column="beneficiary_created_date",
+            run_date=run_date,
+            dataset_name="beneficiary_master",
+        )
+    ].copy()
+
     account_enrichment = accounts.rename(
         columns={
             "account_number": "resolved_wio_account_number",
@@ -664,7 +761,7 @@ def _build_beneficiary_events(
         }
     )
 
-    enriched = beneficiaries.merge(
+    enriched = eligible_beneficiaries.merge(
         account_enrichment,
         how="left",
         on="customer_id",
@@ -813,15 +910,11 @@ def build_canonical_discovery_inputs(
         run_date
     )
 
-    loaded = {
-        contract.filename: _read_contract_csv(
-            resolved_source_directory,
-            contract,
-        )
-        for contract in SCENARIO_1_SOURCE_CONTRACTS
-    }
+    sources = load_raw_discovery_sources(
+        resolved_source_directory
+    )
 
-    seed_pool = loaded["seed_mule_pool.csv"]
+    seed_pool = sources.seed_mule_pool
 
     source_snapshot_dates = sorted(
         seed_pool["snapshot_date"]
@@ -841,8 +934,8 @@ def build_canonical_discovery_inputs(
         )
 
     beneficiaries = _beneficiary_union(
-        loaded["retail_beneficiary_master.csv"],
-        loaded["sme_beneficiary_master.csv"],
+        sources.retail_beneficiaries,
+        sources.sme_beneficiaries,
     )
 
     return CanonicalDiscoveryInputs(
@@ -851,7 +944,7 @@ def build_canonical_discovery_inputs(
         ),
         customer_identity=(
             _prepare_customer_identity_raw(
-                loaded["customer_identity.csv"],
+                sources.customer_identity,
                 resolved_run_date,
             )
         ),
@@ -862,15 +955,9 @@ def build_canonical_discovery_inputs(
         ),
         counterparty_events=(
             _prepare_counterparty_events_raw(
-                local_inward=loaded[
-                    "local_inward_payments.csv"
-                ],
-                local_outward=loaded[
-                    "local_outward_payments.csv"
-                ],
-                accounts=loaded[
-                    "customer_account_master.csv"
-                ],
+                local_inward=sources.local_inward_payments,
+                local_outward=sources.local_outward_payments,
+                accounts=sources.customer_accounts,
                 beneficiaries=beneficiaries,
                 run_date=resolved_run_date,
             )
