@@ -68,24 +68,53 @@ Use only the supplied evidence payload. Do not invent
 transactions, identities, account behavior, registry
 information, or fraud outcomes.
 
-Decision definitions:
+A deterministic identity link or an approved suspicious
+counterparty is an assessment trigger, not proof that the
+customer is mule-like. Do not choose MULE_LIKE solely because
+of relationship proximity. Evaluate the customer's own
+transaction, flow-through, rapid-drain, funding-source,
+salary, tenure, beneficiary, and counterparty behavior.
+
+Decision definitions and calibration:
 
 MULE_LIKE:
-The evidence supports treating the customer as mule-like.
-The customer may become a recursive relationship-expansion
-source.
+The customer's own behavior shows a repeated or corroborated
+transit pattern consistent with mule activity. Normally this
+requires multiple independent behavioral indicators, such as
+rapid drain or high flow-through together with multiple
+funding sources, repeated dispersal, beneficiary velocity, or
+several newly created beneficiaries. The customer may become
+a recursive relationship-expansion source.
+
+Do not choose MULE_LIKE for a single inbound/outbound pair, a
+single funding source, one beneficiary, a young account alone,
+one transfer to an approved suspicious counterparty, or an
+identity link without corroborating customer behavior. Sparse
+one-off activity should normally be INSUFFICIENT_EVIDENCE.
 
 EXPOSED_VULNERABLE:
-The customer appears exposed, manipulated, or vulnerable,
-but the evidence does not support mule-like expansion.
+The customer has a credible legitimate baseline but shows an
+isolated or unusual exposure to a suspicious relationship,
+without repeated transit, rapid-drain, or multi-source mule
+behavior. Relationship proximity alone is not sufficient.
 
 LOW_CONCERN:
 The evidence is more consistent with legitimate or
-low-concern activity.
+low-concern activity, such as established tenure, stable
+behavior, low flow-through, mature beneficiary relationships,
+and no rapid-drain or multi-source transit pattern. A
+deterministic identity link alone must not elevate the result.
 
 INSUFFICIENT_EVIDENCE:
-The evidence is insufficient to classify the customer as
-mule-like.
+The history is sparse, one-off, ambiguous, or otherwise
+insufficient to distinguish mule-like behavior from ordinary
+customer activity. Use this rather than MULE_LIKE when the
+only concern is a relationship trigger plus limited activity.
+
+Confidence calibration:
+Use HIGH only when multiple independent evidence categories
+corroborate the decision. Sparse or one-off evidence must not
+receive HIGH confidence.
 
 Return a concise evidence-based rationale, a stable uppercase
 reason code, one to four key evidence statements, and a
