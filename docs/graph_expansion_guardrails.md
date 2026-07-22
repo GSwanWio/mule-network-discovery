@@ -77,3 +77,21 @@ The same telemetry contract must be emitted after recursive customer decisions,
 not only after relationship discovery. This captures whether newly approved
 `MULE_LIKE` customers widen the next discovery frontier even when the graph's
 node and edge counts do not change during the decision phase.
+
+## Frontier-exhaustion termination contract
+
+A group may be marked `TERMINATED` with reason `FRONTIER_EXHAUSTED` only when:
+
+- every counterparty and customer AI action is completed or suppressed;
+- the final approved expansion source has been consumed;
+- raw-source discovery finds no unseen shared counterparty;
+- the completed expansion ledger records the final source with zero new
+  relationship rows;
+- the ready and failed-closed frontier counts are both zero.
+
+Termination is persisted on the group state and emitted as a separate audit
+projection. An unchanged rerun must retain the same nodes, edges, decisions,
+expansion ledger, and termination reason while performing zero discovery and
+AI work. `FRONTIER_EXHAUSTED` is distinct from a guardrail stop: it means the
+available network evidence has been fully traversed, not that a configured cap
+blocked further work.
