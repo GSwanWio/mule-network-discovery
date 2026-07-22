@@ -70,3 +70,10 @@ At minimum, evaluate p50, p90, p95, p99, and maximum values for group size,
 node degree, depth, frontier width, runtime, and AI calls. Set soft thresholds
 around unusual-but-reviewable upper-tail behavior and separate hard emergency
 ceilings. Thresholds must be versioned and included in every run audit.
+
+## Phase-level telemetry
+
+The same telemetry contract must be emitted after recursive customer decisions,
+not only after relationship discovery. This captures whether newly approved
+`MULE_LIKE` customers widen the next discovery frontier even when the graph's
+node and edge counts do not change during the decision phase.
