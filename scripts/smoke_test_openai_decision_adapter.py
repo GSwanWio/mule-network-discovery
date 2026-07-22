@@ -32,19 +32,25 @@ class FakeResponses:
         self,
         *,
         parsed: object | None = None,
+        raw_output: str | None = None,
         refusal: str | None = None,
         status: str = "completed",
+        incomplete_reason: str | None = None,
         error: Exception | None = None,
     ) -> None:
         self.parsed = parsed
+        self.raw_output = raw_output
         self.refusal = refusal
         self.status = status
+        self.incomplete_reason = (
+            incomplete_reason
+        )
         self.error = error
         self.calls: list[
             dict[str, object]
         ] = []
 
-    def parse(
+    def create(
         self,
         **kwargs: object,
     ) -> object:
@@ -55,6 +61,7 @@ class FakeResponses:
             raise self.error
 
         output = []
+        output_text = ""
 
         if self.refusal is not None:
             output = [
@@ -69,11 +76,56 @@ class FakeResponses:
                 )
             ]
 
+        else:
+            if self.raw_output is not None:
+                output_text = self.raw_output
+
+            elif self.parsed is not None:
+                output_text = (
+                    self.parsed.model_dump_json()
+                )
+
+            if output_text:
+                output = [
+                    SimpleNamespace(
+                        type="message",
+                        content=[
+                            SimpleNamespace(
+                                type="output_text",
+                                text=output_text,
+                            )
+                        ],
+                    )
+                ]
+
+        incomplete_details = None
+
+        if self.incomplete_reason:
+            incomplete_details = (
+                SimpleNamespace(
+                    reason=(
+                        self.incomplete_reason
+                    )
+                )
+            )
+
         return SimpleNamespace(
             id="resp_test_123",
             _request_id="req_test_123",
             status=self.status,
-            output_parsed=self.parsed,
+            incomplete_details=(
+                incomplete_details
+            ),
+            usage=SimpleNamespace(
+                input_tokens=250,
+                output_tokens=120,
+                output_tokens_details=(
+                    SimpleNamespace(
+                        reasoning_tokens=40,
+                    )
+                ),
+            ),
+            output_text=output_text,
             output=output,
         )
 
@@ -233,9 +285,39 @@ def main() -> None:
     )
 
     assert call["model"] == "test-model"
-    assert call["text_format"] is (
-        CounterpartyDecisionAssessment
+
+    assert call["reasoning"] == {
+        "effort": "minimal",
+    }
+
+    assert (
+        call["text"]["verbosity"]
+        == "low"
     )
+
+    format_config = call["text"][
+        "format"
+    ]
+
+    assert (
+        format_config["type"]
+        == "json_schema"
+    )
+
+    assert (
+        format_config["name"]
+        == "CounterpartyDecisionAssessment"
+    )
+
+    assert format_config["strict"] is True
+
+    assert (
+        format_config["schema"]
+        == CounterpartyDecisionAssessment
+        .model_json_schema()
+    )
+
+    assert call["max_output_tokens"] == 500
 
     assert (
         adapter.last_call_metadata[
@@ -342,7 +424,11 @@ def main() -> None:
         OpenAIDecisionAdapter(
             client=FakeClient(
                 FakeResponses(
-                    status="incomplete"
+                    status="incomplete",
+                    incomplete_reason=(
+                        "max_output_tokens"
+                    ),
+                    raw_output='{"decision":',
                 )
             ),
             model="test-model",
@@ -365,7 +451,72 @@ def main() -> None:
             round_number=1,
             sequence_number=1,
         ),
-        "AI_INCOMPLETE_RESPONSE",
+        "AI_OUTPUT_TRUNCATED",
+    )
+
+    try:
+        incomplete_adapter.decide(
+            subject_type="COUNTERPARTY",
+            subject_key=counterparty_key,
+            feature_snapshot_hash=(
+                counterparty_hash
+            ),
+            feature_payload_json=(
+                counterparty_payload
+            ),
+            run_date=date(2026, 7, 20),
+            round_number=1,
+            sequence_number=1,
+        )
+
+    except OpenAIDecisionError as exc:
+        assert exc.response_id == (
+            "resp_test_123"
+        )
+        assert exc.request_id == (
+            "req_test_123"
+        )
+        assert exc.response_status == (
+            "incomplete"
+        )
+        assert exc.incomplete_reason == (
+            "max_output_tokens"
+        )
+        assert exc.input_tokens == "250"
+        assert exc.output_tokens == "120"
+        assert exc.reasoning_tokens == "40"
+
+    else:
+        raise AssertionError(
+            "Expected traceable incomplete error."
+        )
+
+    malformed_adapter = OpenAIDecisionAdapter(
+        client=FakeClient(
+            FakeResponses(
+                raw_output='{"decision":',
+            )
+        ),
+        model="test-model",
+        prompt_version="test-v1",
+        max_output_tokens=500,
+    )
+
+    assert_error_code(
+        lambda: malformed_adapter.decide(
+            subject_type="COUNTERPARTY",
+            subject_key=counterparty_key,
+            feature_snapshot_hash=(
+                counterparty_hash
+            ),
+            feature_payload_json=(
+                counterparty_payload
+            ),
+            run_date=date(2026, 7, 20),
+            round_number=1,
+            sequence_number=1,
+        ),
+        "AI_OUTPUT_TRUNCATED",
     )
 
     error_adapter = OpenAIDecisionAdapter(
@@ -395,7 +546,7 @@ def main() -> None:
             round_number=1,
             sequence_number=1,
         ),
-        "AI_API_OR_PARSE_ERROR",
+        "AI_API_ERROR",
     )
 
     assert_error_code(
@@ -430,6 +581,8 @@ def main() -> None:
 
     print("Refusal handling: passed")
     print("Incomplete response handling: passed")
+    print("Response trace metadata: passed")
+    print("Completed-output schema handling: passed")
     print("API failure handling: passed")
     print("Evidence hash protection: passed")
     print("Live API calls made: 0")

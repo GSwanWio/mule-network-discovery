@@ -42,10 +42,22 @@ AI_CALL_LEDGER_COLUMNS = (
     "call_status",
     "attempted_at",
     "generated_decision_id",
+    "decision",
+    "reason_code",
+    "confidence",
+    "rationale",
+    "key_evidence_json",
+    "model",
+    "prompt_version",
     "error_code",
     "error_message",
     "response_id",
     "request_id",
+    "response_status",
+    "incomplete_reason",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
 )
 
 
@@ -256,6 +268,55 @@ class CsvAiCallLedger:
                             "",
                         )
                     ),
+                    "decision": str(
+                        getattr(
+                            row,
+                            "decision",
+                            "",
+                        )
+                    ),
+                    "reason_code": str(
+                        getattr(
+                            row,
+                            "reason_code",
+                            "",
+                        )
+                    ),
+                    "confidence": str(
+                        getattr(
+                            row,
+                            "confidence",
+                            "",
+                        )
+                    ),
+                    "rationale": str(
+                        getattr(
+                            row,
+                            "rationale",
+                            "",
+                        )
+                    ),
+                    "key_evidence_json": str(
+                        getattr(
+                            row,
+                            "key_evidence_json",
+                            "[]",
+                        )
+                    ),
+                    "model": str(
+                        getattr(
+                            row,
+                            "model",
+                            "",
+                        )
+                    ),
+                    "prompt_version": str(
+                        getattr(
+                            row,
+                            "prompt_version",
+                            "",
+                        )
+                    ),
                     "error_code": str(
                         getattr(
                             row,
@@ -281,6 +342,41 @@ class CsvAiCallLedger:
                         getattr(
                             row,
                             "request_id",
+                            "",
+                        )
+                    ),
+                    "response_status": str(
+                        getattr(
+                            row,
+                            "response_status",
+                            "",
+                        )
+                    ),
+                    "incomplete_reason": str(
+                        getattr(
+                            row,
+                            "incomplete_reason",
+                            "",
+                        )
+                    ),
+                    "input_tokens": str(
+                        getattr(
+                            row,
+                            "input_tokens",
+                            "",
+                        )
+                    ),
+                    "output_tokens": str(
+                        getattr(
+                            row,
+                            "output_tokens",
+                            "",
+                        )
+                    ),
+                    "reasoning_tokens": str(
+                        getattr(
+                            row,
+                            "reasoning_tokens",
                             "",
                         )
                     ),
@@ -334,6 +430,8 @@ def run_controlled_daily_ai(
         [],
         object,
     ] = OpenAIDecisionAdapter.from_environment,
+    allowed_action_types: set[str] | frozenset[str] | None = None,
+    supplemental_subject_payloads: pd.DataFrame | None = None,
 ) -> ControlledDailyAiRunResult:
     """Run only the number of calls allowed by both caps."""
     resolved_run_date = parse_run_date(
@@ -348,9 +446,29 @@ def run_controlled_daily_ai(
         state_directory
     )
 
+    resolved_action_types = (
+        AI_ACTION_TYPES
+        if allowed_action_types is None
+        else frozenset(allowed_action_types)
+    )
+
+    unsupported_action_types = sorted(
+        resolved_action_types
+        - AI_ACTION_TYPES
+    )
+
+    if unsupported_action_types:
+        raise ValueError(
+            "allowed_action_types contains unsupported AI "
+            f"actions: {unsupported_action_types}"
+        )
+
     initial_plan = build_incremental_daily_plan(
         state_store=state_store,
         run_date=resolved_run_date,
+        supplemental_subject_payloads=(
+            supplemental_subject_payloads
+        ),
     )
 
     calls_before_run = (
@@ -369,7 +487,7 @@ def run_controlled_daily_ai(
         initial_plan.actionable_queue[
             "action_type"
         ]
-        .isin(AI_ACTION_TYPES)
+        .isin(resolved_action_types)
         .sum()
     )
 
@@ -403,6 +521,12 @@ def run_controlled_daily_ai(
             decision_adapter=decision_adapter,
             run_date=resolved_run_date,
             max_ai_calls=calls_allowed,
+            allowed_action_types=(
+                resolved_action_types
+            ),
+            supplemental_subject_payloads=(
+                supplemental_subject_payloads
+            ),
         )
     )
 

@@ -920,7 +920,11 @@ def merge_expansion_relationships(
                     ),
                     candidate_event_count=(
                         _optional_integer(
-                            relationship.candidate_event_count
+                            getattr(
+                                relationship,
+                                "total_candidate_event_count",
+                                relationship.candidate_event_count,
+                            )
                         )
                     ),
                 )

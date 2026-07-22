@@ -7,9 +7,9 @@ from dataclasses import dataclass
 
 
 DEFAULT_OPENAI_MODEL = "gpt-5-mini"
-DEFAULT_PROMPT_VERSION = "mule-network-v1"
+DEFAULT_PROMPT_VERSION = "mule-network-v3"
 DEFAULT_TIMEOUT_SECONDS = 45.0
-DEFAULT_MAX_OUTPUT_TOKENS = 1200
+DEFAULT_MAX_OUTPUT_TOKENS = 4000
 
 
 @dataclass(frozen=True)

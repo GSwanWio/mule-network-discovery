@@ -25,3 +25,5 @@ htmlcov/
 # Generated demo outputs
 data/demo/output/*
 !data/demo/output/.gitkeep
+data/synthetic/*/canonical/
+data/synthetic/*/runtime/

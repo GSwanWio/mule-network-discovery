@@ -1,0 +1,46 @@
+{
+  "contains_ai_decisions": false,
+  "contains_prebuilt_edges": false,
+  "contains_prebuilt_groups": false,
+  "contains_prebuilt_nodes": false,
+  "design_reference": {
+    "eid_linked_entity_id": "B2001",
+    "first_layer_counterparty_accounts": [
+      "990100000001",
+      "880100000001"
+    ],
+    "second_layer_counterparty_account": "990200000001",
+    "seed_customer_id": "R1001"
+  },
+  "generation_seed": 20260720,
+  "row_counts": {
+    "customer_account_master.csv": 105,
+    "customer_identity.csv": 105,
+    "local_inward_payments.csv": 207,
+    "local_outward_payments.csv": 364,
+    "retail_beneficiary_master.csv": 92,
+    "seed_mule_pool.csv": 1,
+    "sme_beneficiary_master.csv": 20
+  },
+  "run_date": "2026-07-20",
+  "scenario_name": "scenario_1_mixed_eid_and_counterparty_branches",
+  "sha256": {
+    "customer_account_master.csv": "ff75e4e8fe4b276c999e3ae512ac49efdcd9c29f047a3d490198a5e08dc8d8dd",
+    "customer_identity.csv": "9b5ccb55e6a9d328b5ccb2cf906b28477ac5abfbee90e3a909c55c7935fd62fb",
+    "local_inward_payments.csv": "176e2cb7c526630d5e6c8092a27f359223ee935fbcc2d0d4a6e069f2be4fade5",
+    "local_outward_payments.csv": "e7b71e8b0147b711f6f9d98a7aee8d90277bc25ab82b59e53697dcce0235dd92",
+    "retail_beneficiary_master.csv": "bb50bf1e8ea46ee00b50af38458d1c453b6cab9dbf51780ecc13763da185c012",
+    "seed_mule_pool.csv": "42380d208e46c434edd203a3aaa42f735d1fafa2a93c3528cbef095ac9e2d741",
+    "sme_beneficiary_master.csv": "aec1a5b3942309acaa49f52b17b9cd53ff29ec5ccc7cbfe386a4103586c0d6db"
+  },
+  "source_files": [
+    "customer_account_master.csv",
+    "customer_identity.csv",
+    "local_inward_payments.csv",
+    "local_outward_payments.csv",
+    "retail_beneficiary_master.csv",
+    "seed_mule_pool.csv",
+    "sme_beneficiary_master.csv"
+  ],
+  "source_only": true
+}

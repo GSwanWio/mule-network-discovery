@@ -836,6 +836,7 @@ def _apply_failed_closed_status(
 def build_incremental_daily_plan(
     state_store: CsvDailyStateStore,
     run_date: date | str,
+    supplemental_subject_payloads: pd.DataFrame | None = None,
 ) -> DailyIncrementalPlan:
     """Reconcile current evidence with persistent daily state."""
     resolved_run_date = parse_run_date(
@@ -848,6 +849,9 @@ def build_incremental_daily_plan(
         unified_result=snapshot.network,
         decisions=snapshot.decision_store,
         run_date=resolved_run_date,
+        supplemental_subject_payloads=(
+            supplemental_subject_payloads
+        ),
     )
 
     completed_queue_ids = set(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Protocol
@@ -81,6 +82,8 @@ def execute_incremental_ai_actions(
     decision_adapter: IncrementalDecisionAdapter,
     run_date: date | str,
     max_ai_calls: int,
+    allowed_action_types: set[str] | frozenset[str] | None = None,
+    supplemental_subject_payloads: pd.DataFrame | None = None,
 ) -> IncrementalAiExecutionResult:
     """Execute AI items independently and fail closed per item."""
     if max_ai_calls < 0:
@@ -92,16 +95,36 @@ def execute_incremental_ai_actions(
         run_date
     )
 
+    resolved_action_types = (
+        AI_ACTION_TYPES
+        if allowed_action_types is None
+        else frozenset(allowed_action_types)
+    )
+
+    unsupported_action_types = sorted(
+        resolved_action_types
+        - AI_ACTION_TYPES
+    )
+
+    if unsupported_action_types:
+        raise ValueError(
+            "allowed_action_types contains unsupported AI "
+            f"actions: {unsupported_action_types}"
+        )
+
     initial_plan = build_incremental_daily_plan(
         state_store=state_store,
         run_date=resolved_run_date,
+        supplemental_subject_payloads=(
+            supplemental_subject_payloads
+        ),
     )
 
     ai_queue = (
         initial_plan.actionable_queue.loc[
             initial_plan.actionable_queue[
                 "action_type"
-            ].isin(AI_ACTION_TYPES)
+            ].isin(resolved_action_types)
         ]
         .sort_values(
             by=[
@@ -228,6 +251,22 @@ def execute_incremental_ai_actions(
                 decision_adapter
             )
 
+            assessment = metadata.get(
+                "assessment",
+                {},
+            )
+
+            if not isinstance(assessment, dict):
+                assessment = {}
+
+            key_evidence = assessment.get(
+                "key_evidence",
+                [],
+            )
+
+            if not isinstance(key_evidence, list):
+                key_evidence = []
+
             execution_record.update(
                 {
                     "execution_status": "COMPLETED",
@@ -235,6 +274,32 @@ def execute_incremental_ai_actions(
                         decision_record[
                             "decision_id"
                         ]
+                    ),
+                    "decision": decision_record[
+                        "decision"
+                    ],
+                    "reason_code": decision_record[
+                        "reason_code"
+                    ],
+                    "confidence": assessment.get(
+                        "confidence",
+                        "",
+                    ),
+                    "rationale": assessment.get(
+                        "rationale",
+                        "",
+                    ),
+                    "key_evidence_json": json.dumps(
+                        key_evidence,
+                        sort_keys=True,
+                    ),
+                    "model": metadata.get(
+                        "model",
+                        "",
+                    ),
+                    "prompt_version": metadata.get(
+                        "prompt_version",
+                        "",
                     ),
                     "error_code": "",
                     "error_message": "",
@@ -244,6 +309,26 @@ def execute_incremental_ai_actions(
                     ),
                     "request_id": metadata.get(
                         "request_id",
+                        "",
+                    ),
+                    "response_status": metadata.get(
+                        "response_status",
+                        "",
+                    ),
+                    "incomplete_reason": metadata.get(
+                        "incomplete_reason",
+                        "",
+                    ),
+                    "input_tokens": metadata.get(
+                        "input_tokens",
+                        "",
+                    ),
+                    "output_tokens": metadata.get(
+                        "output_tokens",
+                        "",
+                    ),
+                    "reasoning_tokens": metadata.get(
+                        "reasoning_tokens",
                         "",
                     ),
                 }
@@ -278,16 +363,79 @@ def execute_incremental_ai_actions(
                 or ""
             )
 
+            response_status = str(
+                getattr(
+                    exc,
+                    "response_status",
+                    "",
+                )
+                or ""
+            )
+
+            incomplete_reason = str(
+                getattr(
+                    exc,
+                    "incomplete_reason",
+                    "",
+                )
+                or ""
+            )
+
+            input_tokens = str(
+                getattr(
+                    exc,
+                    "input_tokens",
+                    "",
+                )
+                or ""
+            )
+
+            output_tokens = str(
+                getattr(
+                    exc,
+                    "output_tokens",
+                    "",
+                )
+                or ""
+            )
+
+            reasoning_tokens = str(
+                getattr(
+                    exc,
+                    "reasoning_tokens",
+                    "",
+                )
+                or ""
+            )
+
             execution_record.update(
                 {
                     "execution_status": (
                         "FAILED_CLOSED"
                     ),
                     "generated_decision_id": "",
+                    "decision": "",
+                    "reason_code": "",
+                    "confidence": "",
+                    "rationale": "",
+                    "key_evidence_json": "[]",
+                    "model": "",
+                    "prompt_version": "",
                     "error_code": error_code,
                     "error_message": error_message,
                     "response_id": response_id,
                     "request_id": request_id,
+                    "response_status": (
+                        response_status
+                    ),
+                    "incomplete_reason": (
+                        incomplete_reason
+                    ),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "reasoning_tokens": (
+                        reasoning_tokens
+                    ),
                 }
             )
 
@@ -350,6 +498,9 @@ def execute_incremental_ai_actions(
         unified_result=current_state.network,
         decisions=decision_store,
         run_date=resolved_run_date,
+        supplemental_subject_payloads=(
+            supplemental_subject_payloads
+        ),
     )
 
     state_store.save_network_state(
@@ -365,6 +516,9 @@ def execute_incremental_ai_actions(
         build_incremental_daily_plan(
             state_store=state_store,
             run_date=resolved_run_date,
+            supplemental_subject_payloads=(
+                supplemental_subject_payloads
+            ),
         )
     )
 
@@ -395,10 +549,22 @@ def execute_incremental_ai_actions(
         for column in [
             "execution_status",
             "generated_decision_id",
+            "decision",
+            "reason_code",
+            "confidence",
+            "rationale",
+            "key_evidence_json",
+            "model",
+            "prompt_version",
             "error_code",
             "error_message",
             "response_id",
             "request_id",
+            "response_status",
+            "incomplete_reason",
+            "input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
         ]:
             executed_actions[column] = (
                 pd.Series(dtype="string")

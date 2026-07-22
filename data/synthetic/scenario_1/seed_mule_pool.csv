@@ -1,0 +1,2 @@
+snapshot_date,seed_event_id,seed_customer_id,seed_account_id,seed_account_number,seed_iban,seed_entity_type,date_reported,seed_source,source_event_type,source_transaction_reference
+2026-07-20,FRC|LOCAL|202607150001,R1001,ACC-R1001-001,100000000001,AE070330000100000000001,RETAIL,2026-07-15,FRC,FTS_REFUND_REQUEST,LOC-IN-REPORTED-202607150001

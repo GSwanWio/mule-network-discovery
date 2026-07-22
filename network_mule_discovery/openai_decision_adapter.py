@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from openai import OpenAI
+from pydantic import ValidationError
 
 from network_mule_discovery.ai_decision_schemas import (
     CounterpartyDecisionAssessment,
@@ -51,8 +52,9 @@ INSUFFICIENT_EVIDENCE_SUPPRESS:
 The evidence is insufficient to justify network expansion.
 
 Return a concise evidence-based rationale, a stable uppercase
-reason code, one to eight key evidence statements, and a
-confidence level.
+reason code, one to four key evidence statements, and a
+confidence level. Keep the rationale under 500 characters
+and each evidence statement under 160 characters.
 """.strip()
 
 
@@ -66,28 +68,58 @@ Use only the supplied evidence payload. Do not invent
 transactions, identities, account behavior, registry
 information, or fraud outcomes.
 
-Decision definitions:
+A deterministic identity link or an approved suspicious
+counterparty is an assessment trigger, not proof that the
+customer is mule-like. Do not choose MULE_LIKE solely because
+of relationship proximity. Evaluate the customer's own
+transaction, flow-through, rapid-drain, funding-source,
+salary, tenure, beneficiary, and counterparty behavior.
+
+Decision definitions and calibration:
 
 MULE_LIKE:
-The evidence supports treating the customer as mule-like.
-The customer may become a recursive relationship-expansion
-source.
+The customer's own behavior shows a repeated or corroborated
+transit pattern consistent with mule activity. Normally this
+requires multiple independent behavioral indicators, such as
+rapid drain or high flow-through together with multiple
+funding sources, repeated dispersal, beneficiary velocity, or
+several newly created beneficiaries. The customer may become
+a recursive relationship-expansion source.
+
+Do not choose MULE_LIKE for a single inbound/outbound pair, a
+single funding source, one beneficiary, a young account alone,
+one transfer to an approved suspicious counterparty, or an
+identity link without corroborating customer behavior. Sparse
+one-off activity should normally be INSUFFICIENT_EVIDENCE.
 
 EXPOSED_VULNERABLE:
-The customer appears exposed, manipulated, or vulnerable,
-but the evidence does not support mule-like expansion.
+The customer has a credible legitimate baseline but shows an
+isolated or unusual exposure to a suspicious relationship,
+without repeated transit, rapid-drain, or multi-source mule
+behavior. Relationship proximity alone is not sufficient.
 
 LOW_CONCERN:
 The evidence is more consistent with legitimate or
-low-concern activity.
+low-concern activity, such as established tenure, stable
+behavior, low flow-through, mature beneficiary relationships,
+and no rapid-drain or multi-source transit pattern. A
+deterministic identity link alone must not elevate the result.
 
 INSUFFICIENT_EVIDENCE:
-The evidence is insufficient to classify the customer as
-mule-like.
+The history is sparse, one-off, ambiguous, or otherwise
+insufficient to distinguish mule-like behavior from ordinary
+customer activity. Use this rather than MULE_LIKE when the
+only concern is a relationship trigger plus limited activity.
+
+Confidence calibration:
+Use HIGH only when multiple independent evidence categories
+corroborate the decision. Sparse or one-off evidence must not
+receive HIGH confidence.
 
 Return a concise evidence-based rationale, a stable uppercase
-reason code, one to eight key evidence statements, and a
-confidence level.
+reason code, one to four key evidence statements, and a
+confidence level. Keep the rationale under 500 characters
+and each evidence statement under 160 characters.
 """.strip()
 
 
@@ -98,8 +130,34 @@ class OpenAIDecisionError(RuntimeError):
         self,
         code: str,
         message: str,
+        *,
+        response_id: object = "",
+        request_id: object = "",
+        response_status: object = "",
+        incomplete_reason: object = "",
+        input_tokens: object = "",
+        output_tokens: object = "",
+        reasoning_tokens: object = "",
     ) -> None:
         self.code = code
+        self.response_id = str(response_id or "")
+        self.request_id = str(request_id or "")
+        self.response_status = str(
+            response_status or ""
+        )
+        self.incomplete_reason = str(
+            incomplete_reason or ""
+        )
+        self.input_tokens = str(
+            input_tokens or ""
+        )
+        self.output_tokens = str(
+            output_tokens or ""
+        )
+        self.reasoning_tokens = str(
+            reasoning_tokens or ""
+        )
+
         super().__init__(f"{code}: {message}")
 
 
@@ -155,6 +213,160 @@ def _extract_refusal(
             return refusal or "Model refusal"
 
     return None
+
+
+def _extract_output_text(
+    response: object,
+) -> str:
+    """Return the completed output-text payload."""
+    direct_output = getattr(
+        response,
+        "output_text",
+        None,
+    )
+
+    if isinstance(direct_output, str):
+        direct_output = direct_output.strip()
+
+        if direct_output:
+            return direct_output
+
+    output_parts: list[str] = []
+
+    for output_item in (
+        getattr(response, "output", None)
+        or []
+    ):
+        if (
+            getattr(output_item, "type", None)
+            != "message"
+        ):
+            continue
+
+        for content_item in (
+            getattr(output_item, "content", None)
+            or []
+        ):
+            if (
+                getattr(content_item, "type", None)
+                != "output_text"
+            ):
+                continue
+
+            value = str(
+                getattr(
+                    content_item,
+                    "text",
+                    "",
+                )
+            )
+
+            if value:
+                output_parts.append(value)
+
+    return "".join(output_parts).strip()
+
+
+def _response_metadata(
+    response: object,
+) -> dict[str, object]:
+    """Extract response identifiers, status and token usage."""
+    incomplete_details = getattr(
+        response,
+        "incomplete_details",
+        None,
+    )
+
+    usage = getattr(
+        response,
+        "usage",
+        None,
+    )
+
+    output_details = getattr(
+        usage,
+        "output_tokens_details",
+        None,
+    )
+
+    return {
+        "response_id": getattr(
+            response,
+            "id",
+            "",
+        ) or "",
+        "request_id": getattr(
+            response,
+            "_request_id",
+            "",
+        ) or "",
+        "response_status": getattr(
+            response,
+            "status",
+            "",
+        ) or "",
+        "incomplete_reason": getattr(
+            incomplete_details,
+            "reason",
+            "",
+        ) or "",
+        "input_tokens": getattr(
+            usage,
+            "input_tokens",
+            "",
+        ) or "",
+        "output_tokens": getattr(
+            usage,
+            "output_tokens",
+            "",
+        ) or "",
+        "reasoning_tokens": getattr(
+            output_details,
+            "reasoning_tokens",
+            "",
+        ) or "",
+    }
+
+
+def _decision_error(
+    *,
+    code: str,
+    message: str,
+    metadata: dict[str, object],
+) -> OpenAIDecisionError:
+    """Create a traceable fail-closed adapter error."""
+    return OpenAIDecisionError(
+        code,
+        message,
+        response_id=metadata.get(
+            "response_id",
+            "",
+        ),
+        request_id=metadata.get(
+            "request_id",
+            "",
+        ),
+        response_status=metadata.get(
+            "response_status",
+            "",
+        ),
+        incomplete_reason=metadata.get(
+            "incomplete_reason",
+            "",
+        ),
+        input_tokens=metadata.get(
+            "input_tokens",
+            "",
+        ),
+        output_tokens=metadata.get(
+            "output_tokens",
+            "",
+        ),
+        reasoning_tokens=metadata.get(
+            "reasoning_tokens",
+            "",
+        ),
+    )
 
 
 def _validate_feature_payload(
@@ -331,7 +543,7 @@ class OpenAIDecisionAdapter:
         }
 
         try:
-            response = self.client.responses.parse(
+            response = self.client.responses.create(
                 model=self.model,
                 instructions=system_prompt,
                 input=json.dumps(
@@ -339,7 +551,23 @@ class OpenAIDecisionAdapter:
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
-                text_format=response_schema,
+                reasoning={
+                    "effort": "minimal",
+                },
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": (
+                            response_schema.__name__
+                        ),
+                        "schema": (
+                            response_schema
+                            .model_json_schema()
+                        ),
+                        "strict": True,
+                    },
+                    "verbosity": "low",
+                },
                 max_output_tokens=(
                     self.max_output_tokens
                 ),
@@ -347,24 +575,91 @@ class OpenAIDecisionAdapter:
 
         except Exception as exc:
             raise OpenAIDecisionError(
-                "AI_API_OR_PARSE_ERROR",
+                "AI_API_ERROR",
                 f"{type(exc).__name__}: {exc}",
+                request_id=getattr(
+                    exc,
+                    "request_id",
+                    "",
+                ),
+                response_id=getattr(
+                    exc,
+                    "response_id",
+                    "",
+                ),
             ) from exc
 
-        response_status = getattr(
-            response,
-            "status",
-            None,
+        metadata = _response_metadata(
+            response
         )
+
+        self.last_call_metadata = {
+            **metadata,
+            "model": self.model,
+            "prompt_version": (
+                self.prompt_version
+            ),
+            "subject_type": subject_type,
+            "subject_key": subject_key,
+            "round_number": round_number,
+            "sequence_number": sequence_number,
+        }
+
+        response_status = str(
+            metadata["response_status"]
+        ).strip().lower()
+
+        incomplete_reason = str(
+            metadata["incomplete_reason"]
+        ).strip().lower()
+
+        if response_status == "incomplete":
+            error_code = (
+                "AI_OUTPUT_TRUNCATED"
+                if incomplete_reason
+                == "max_output_tokens"
+                else "AI_CONTENT_FILTERED"
+                if incomplete_reason
+                == "content_filter"
+                else "AI_INCOMPLETE_RESPONSE"
+            )
+
+            raise _decision_error(
+                code=error_code,
+                message=(
+                    "Response status was incomplete; "
+                    f"reason={incomplete_reason or 'unknown'}, "
+                    "input_tokens="
+                    f"{metadata['input_tokens'] or 'unknown'}, "
+                    "output_tokens="
+                    f"{metadata['output_tokens'] or 'unknown'}, "
+                    "reasoning_tokens="
+                    f"{metadata['reasoning_tokens'] or 'unknown'}."
+                ),
+                metadata=metadata,
+            )
 
         if response_status in {
             "failed",
-            "incomplete",
             "cancelled",
         }:
-            raise OpenAIDecisionError(
-                "AI_INCOMPLETE_RESPONSE",
-                f"Response status: {response_status}",
+            raise _decision_error(
+                code="AI_RESPONSE_FAILED",
+                message=(
+                    "Response ended with status: "
+                    f"{response_status}."
+                ),
+                metadata=metadata,
+            )
+
+        if response_status != "completed":
+            raise _decision_error(
+                code="AI_UNEXPECTED_RESPONSE_STATUS",
+                message=(
+                    "Unexpected response status: "
+                    f"{response_status or 'blank'}."
+                ),
+                metadata=metadata,
             )
 
         refusal = _extract_refusal(
@@ -372,40 +667,48 @@ class OpenAIDecisionAdapter:
         )
 
         if refusal:
-            raise OpenAIDecisionError(
-                "AI_REFUSAL",
-                refusal,
+            raise _decision_error(
+                code="AI_REFUSAL",
+                message=refusal,
+                metadata=metadata,
             )
 
-        parsed = getattr(
-            response,
-            "output_parsed",
-            None,
+        output_text = _extract_output_text(
+            response
         )
 
-        if parsed is None:
-            raise OpenAIDecisionError(
-                "AI_PARSE_FAILURE",
-                "The response contained no parsed "
-                "structured decision.",
+        if not output_text:
+            raise _decision_error(
+                code="AI_EMPTY_OUTPUT",
+                message=(
+                    "The completed response contained no "
+                    "structured output text."
+                ),
+                metadata=metadata,
             )
 
-        if not isinstance(
-            parsed,
-            response_schema,
-        ):
-            try:
-                parsed = (
-                    response_schema
-                    .model_validate(parsed)
-                )
+        try:
+            parsed = (
+                response_schema
+                .model_validate_json(output_text)
+            )
 
-            except Exception as exc:
-                raise OpenAIDecisionError(
-                    "AI_SCHEMA_FAILURE",
-                    "The parsed output did not match "
-                    "the required schema.",
-                ) from exc
+        except ValidationError as exc:
+            error_message = str(exc)
+
+            error_code = (
+                "AI_OUTPUT_TRUNCATED"
+                if "EOF while parsing" in error_message
+                else "AI_SCHEMA_PARSE_ERROR"
+            )
+
+            raise _decision_error(
+                code=error_code,
+                message=(
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                metadata=metadata,
+            ) from exc
 
         decision_version = (
             f"{self.prompt_version}:"
@@ -426,24 +729,7 @@ class OpenAIDecisionAdapter:
         ).isoformat()
 
         self.last_call_metadata = {
-            "response_id": getattr(
-                response,
-                "id",
-                None,
-            ),
-            "request_id": getattr(
-                response,
-                "_request_id",
-                None,
-            ),
-            "model": self.model,
-            "prompt_version": (
-                self.prompt_version
-            ),
-            "subject_type": subject_type,
-            "subject_key": subject_key,
-            "round_number": round_number,
-            "sequence_number": sequence_number,
+            **self.last_call_metadata,
             "assessment": (
                 parsed.model_dump()
             ),

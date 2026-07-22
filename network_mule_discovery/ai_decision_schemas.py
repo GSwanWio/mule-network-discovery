@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -32,6 +32,14 @@ CustomerDecision = Literal[
     "INSUFFICIENT_EVIDENCE",
 ]
 
+EvidenceStatement = Annotated[
+    str,
+    Field(
+        min_length=3,
+        max_length=160,
+    ),
+]
+
 
 class DecisionAssessmentBase(BaseModel):
     """Common fields required for every AI decision."""
@@ -48,12 +56,14 @@ class DecisionAssessmentBase(BaseModel):
 
     rationale: str = Field(
         min_length=10,
-        max_length=1200,
+        max_length=500,
     )
 
-    key_evidence: list[str] = Field(
+    key_evidence: list[
+        EvidenceStatement
+    ] = Field(
         min_length=1,
-        max_length=8,
+        max_length=4,
     )
 
     confidence: ConfidenceLevel
