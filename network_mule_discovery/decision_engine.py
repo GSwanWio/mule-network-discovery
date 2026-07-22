@@ -98,6 +98,11 @@ CUSTOMER_SOURCE_DISCOVERY_EDGE_TYPES = frozenset({
     "BENEFICIARY_ADDED_MULE_ACCOUNT",
 })
 
+COUNTERPARTY_GRAPH_RELATIONSHIP_SAMPLE_LIMIT = 10
+COUNTERPARTY_GRAPH_RELATIONSHIP_SAMPLE_METHOD = (
+    "ANCHOR_RELATIONSHIPS_THEN_HIGHEST_ACTIVITY"
+)
+
 
 @dataclass(frozen=True)
 class DecisionProjectionResult:
@@ -243,6 +248,192 @@ def _hash_payload(
     ).hexdigest()
 
     return feature_snapshot_hash, payload_json
+
+
+def _record_digest(
+    records: list[dict[str, object]],
+) -> str:
+    """Hash a complete canonical record set without exposing it."""
+    canonical_json = json.dumps(
+        records,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return hashlib.sha256(
+        canonical_json.encode("utf-8")
+    ).hexdigest()
+
+
+def _numeric_record_value(
+    record: dict[str, object],
+    field_name: str,
+) -> float:
+    """Return one optional numeric record value for stable ranking."""
+    value = record.get(field_name)
+
+    if value is None:
+        return 0.0
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _build_counterparty_relationship_payload(
+    *,
+    relationships: pd.DataFrame,
+    relationship_columns: list[str],
+    subject_node_keys: set[str],
+) -> tuple[
+    list[dict[str, object]],
+    dict[str, object] | None,
+]:
+    """Build bounded counterparty graph evidence with a full-set digest."""
+    full_records = _canonical_records(
+        frame=relationships,
+        columns=relationship_columns,
+    )
+
+    edge_type_counts: dict[str, int] = {}
+    connected_node_keys: set[str] = set()
+    total_source_event_count = 0.0
+    total_candidate_event_count = 0.0
+
+    for record in full_records:
+        edge_type = str(record.get("edge_type") or "UNKNOWN")
+        edge_type_counts[edge_type] = (
+            edge_type_counts.get(edge_type, 0) + 1
+        )
+
+        for field_name in (
+            "source_node_key",
+            "target_node_key",
+        ):
+            node_key = record.get(field_name)
+
+            if (
+                node_key is not None
+                and str(node_key) not in subject_node_keys
+            ):
+                connected_node_keys.add(str(node_key))
+
+        total_source_event_count += _numeric_record_value(
+            record,
+            "source_event_count",
+        )
+        total_candidate_event_count += _numeric_record_value(
+            record,
+            "candidate_event_count",
+        )
+
+    relationship_count = len(full_records)
+    sample_limit = (
+        COUNTERPARTY_GRAPH_RELATIONSHIP_SAMPLE_LIMIT
+    )
+
+    if relationship_count <= sample_limit:
+        # Preserve the legacy payload exactly for small counterparties.
+        # Adding sampling metadata here would invalidate otherwise reusable
+        # cached AI decisions solely because this guardrail was introduced.
+        return full_records, None
+    else:
+        anchor_records = [
+            record
+            for record in full_records
+            if record.get("edge_type")
+            != "SHARED_EXTERNAL_COUNTERPARTY"
+        ]
+        linked_customer_records = [
+            record
+            for record in full_records
+            if record.get("edge_type")
+            == "SHARED_EXTERNAL_COUNTERPARTY"
+        ]
+
+        anchor_records = sorted(
+            anchor_records,
+            key=lambda record: json.dumps(
+                record,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+
+        linked_customer_records = sorted(
+            linked_customer_records,
+            key=lambda record: (
+                -_numeric_record_value(
+                    record,
+                    "candidate_event_count",
+                ),
+                -_numeric_record_value(
+                    record,
+                    "source_event_count",
+                ),
+                json.dumps(
+                    record,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+
+        sampled_records = anchor_records[:sample_limit]
+        remaining_capacity = (
+            sample_limit - len(sampled_records)
+        )
+
+        if remaining_capacity > 0:
+            sampled_records.extend(
+                linked_customer_records[
+                    :remaining_capacity
+                ]
+            )
+
+        sampled_records = sorted(
+            sampled_records,
+            key=lambda record: json.dumps(
+                record,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        payload_mode = "BOUNDED_SAMPLE"
+        sampling_method = (
+            COUNTERPARTY_GRAPH_RELATIONSHIP_SAMPLE_METHOD
+        )
+
+    summary = {
+        "payload_mode": payload_mode,
+        "relationship_count": relationship_count,
+        "sample_limit": sample_limit,
+        "sampled_relationship_count": len(
+            sampled_records
+        ),
+        "omitted_relationship_count": (
+            relationship_count - len(sampled_records)
+        ),
+        "sampling_method": sampling_method,
+        "connected_subject_count": len(
+            connected_node_keys
+        ),
+        "edge_type_counts": dict(
+            sorted(edge_type_counts.items())
+        ),
+        "total_source_event_count": int(
+            total_source_event_count
+        ),
+        "total_candidate_event_count": int(
+            total_candidate_event_count
+        ),
+        "full_relationship_digest": _record_digest(
+            full_records
+        ),
+    }
+
+    return sampled_records, summary
 
 
 def _get_subject_relationships(
@@ -510,6 +701,24 @@ def build_subject_snapshots(
                 .tolist()
             )
 
+            if subject_type == "COUNTERPARTY":
+                (
+                    relationship_payload,
+                    relationship_evidence_summary,
+                ) = _build_counterparty_relationship_payload(
+                    relationships=current_edges,
+                    relationship_columns=(
+                        edge_payload_columns
+                    ),
+                    subject_node_keys=node_keys,
+                )
+            else:
+                relationship_payload = _canonical_records(
+                    frame=current_edges,
+                    columns=edge_payload_columns,
+                )
+                relationship_evidence_summary = None
+
             graph_payload = {
                 "subject_type": subject_type,
                 "subject_key": subject_key,
@@ -517,11 +726,13 @@ def build_subject_snapshots(
                     frame=current_nodes,
                     columns=node_payload_columns,
                 ),
-                "relationships": _canonical_records(
-                    frame=current_edges,
-                    columns=edge_payload_columns,
-                ),
+                "relationships": relationship_payload,
             }
+
+            if relationship_evidence_summary is not None:
+                graph_payload[
+                    "relationship_evidence_summary"
+                ] = relationship_evidence_summary
 
             supplemental_payload = (
                 supplemental_payload_map.get(

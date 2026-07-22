@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date
@@ -25,6 +26,10 @@ COUNTERPARTY_CUSTOMER_PROFILE_FILENAME = (
     "counterparty_customer_behavior_profiles.csv"
 )
 COUNTERPARTY_PAYLOAD_FILENAME = "counterparty_feature_payloads.csv"
+COUNTERPARTY_LINKED_CUSTOMER_SAMPLE_LIMIT = 10
+COUNTERPARTY_LINKED_CUSTOMER_SAMPLE_METHOD = (
+    "HIGHEST_COUNTERPARTY_TRANSFER_AMOUNT_THEN_CUSTOMER_ID"
+)
 
 
 class BehavioralFeatureError(RuntimeError):
@@ -59,6 +64,21 @@ def _round(value: object, digits: int = 6) -> float:
 
 def _inclusive_cutoff(run_date: date) -> pd.Timestamp:
     return pd.Timestamp(run_date) + pd.Timedelta(days=1)
+
+
+def _records_digest(
+    records: list[dict[str, object]],
+) -> str:
+    """Hash a complete evidence population without exposing all rows."""
+    canonical_json = json.dumps(
+        records,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return hashlib.sha256(
+        canonical_json.encode("utf-8")
+    ).hexdigest()
 
 
 def _prepare_sources(
@@ -653,6 +673,10 @@ def build_behavioral_features(
             ),
         )
 
+        sampled_customer_rows = sorted_customer_rows[
+            :COUNTERPARTY_LINKED_CUSTOMER_SAMPLE_LIMIT
+        ]
+
         payload = {
             "subject_type": "COUNTERPARTY",
             "subject_key": counterparty_key,
@@ -680,7 +704,37 @@ def build_behavioral_features(
                     "recent_account_customer_share_30d"
                 ],
             },
-            "highest_value_linked_customers": sorted_customer_rows[:10],
+            "linked_customer_sampling": {
+                "population_customer_count": (
+                    distinct_customer_count
+                ),
+                "sample_limit": (
+                    COUNTERPARTY_LINKED_CUSTOMER_SAMPLE_LIMIT
+                ),
+                "sampled_customer_count": len(
+                    sampled_customer_rows
+                ),
+                "omitted_customer_count": (
+                    distinct_customer_count
+                    - len(sampled_customer_rows)
+                ),
+                "sampling_method": (
+                    COUNTERPARTY_LINKED_CUSTOMER_SAMPLE_METHOD
+                ),
+                "full_population_behavior_digest": (
+                    _records_digest(
+                        sorted(
+                            customer_rows,
+                            key=lambda row: str(
+                                row["customer_id"]
+                            ),
+                        )
+                    )
+                ),
+            },
+            "highest_value_linked_customers": (
+                sampled_customer_rows
+            ),
         }
 
         payload_records.append(
