@@ -1,0 +1,4 @@
+entity_type,entity_id,customer_id,business_id,individual_id,emirates_id_number,customer_segment,customer_status,customer_created_date
+RETAIL,R3001,R3001,,,784-1988-3000001-5,RETAIL,ACTIVE,2024-02-01
+RETAIL,R3002,R3002,,,784 1994 3000002 8,RETAIL,ACTIVE,2026-06-20
+SME,B3001,B3001,B3001,IND-S3-00001,784198230000033,SME,ACTIVE,2023-01-15
