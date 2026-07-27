@@ -19,6 +19,9 @@ from network_mule_discovery.ai_decision_schemas import (
     CounterpartyDecisionAssessment,
     CustomerDecisionAssessment,
 )
+from network_mule_discovery.decision_policy import (
+    COUNTERPARTY_ASSESSMENT_POLICY_VERSION,
+)
 from network_mule_discovery.openai_decision_adapter import (
     OpenAIDecisionAdapter,
     OpenAIDecisionError,
@@ -179,6 +182,17 @@ def build_payload(
         ],
     }
 
+    if subject_type == "COUNTERPARTY":
+        payload["behavioral_evidence"] = {
+            "counterparty_assessment_policy_version": (
+                COUNTERPARTY_ASSESSMENT_POLICY_VERSION
+            ),
+            "aggregate_behavior": {
+                "distinct_customer_count": 3,
+                "transfer_event_count": 3,
+            },
+        }
+
     payload_json = json.dumps(
         payload,
         sort_keys=True,
@@ -286,6 +300,29 @@ def main() -> None:
 
     assert call["model"] == "test-model"
 
+    instructions = str(call["instructions"])
+    normalized_instructions = " ".join(
+        instructions.split()
+    )
+    assert (
+        COUNTERPARTY_ASSESSMENT_POLICY_VERSION
+        in normalized_instructions
+    )
+    assert (
+        "never sufficient by itself for SUSPICIOUS_EXPAND"
+        in normalized_instructions
+    )
+    assert (
+        "at least two independent corroborating evidence "
+        "categories"
+        in normalized_instructions
+    )
+    assert (
+        "Absence of recurrence is not evidence of mule "
+        "aggregation"
+        in normalized_instructions
+    )
+
     assert call["reasoning"] == {
         "effort": "minimal",
     }
@@ -331,6 +368,54 @@ def main() -> None:
             "request_id"
         ]
         == "req_test_123"
+    )
+
+    expected_counterparty_prompt_version = (
+        "test-v1:"
+        f"{COUNTERPARTY_ASSESSMENT_POLICY_VERSION}"
+    )
+    assert (
+        adapter.last_call_metadata[
+            "prompt_version"
+        ]
+        == expected_counterparty_prompt_version
+    )
+    assert (
+        decision["decision_version"]
+        == (
+            f"{expected_counterparty_prompt_version}:"
+            "test-model"
+        )
+    )
+
+    stale_policy_payload = json.loads(
+        counterparty_payload
+    )
+    stale_policy_payload[
+        "behavioral_evidence"
+    ][
+        "counterparty_assessment_policy_version"
+    ] = "counterparty-assessment-policy-v1"
+    stale_policy_payload_json = json.dumps(
+        stale_policy_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    stale_policy_hash = hashlib.sha256(
+        stale_policy_payload_json.encode("utf-8")
+    ).hexdigest()
+
+    assert_error_code(
+        lambda: adapter.decide(
+            subject_type="COUNTERPARTY",
+            subject_key=counterparty_key,
+            feature_snapshot_hash=stale_policy_hash,
+            feature_payload_json=stale_policy_payload_json,
+            run_date=date(2026, 7, 20),
+            round_number=1,
+            sequence_number=1,
+        ),
+        "EVIDENCE_POLICY_VERSION_MISMATCH",
     )
 
     customer_key = "RETAIL|TEST2001"
@@ -390,6 +475,16 @@ def main() -> None:
     assert (
         customer_decision["decision"]
         == "LOW_CONCERN"
+    )
+    assert (
+        customer_adapter.last_call_metadata[
+            "prompt_version"
+        ]
+        == "test-v1"
+    )
+    assert (
+        customer_decision["decision_version"]
+        == "test-v1:test-model"
     )
 
     refusal_adapter = OpenAIDecisionAdapter(

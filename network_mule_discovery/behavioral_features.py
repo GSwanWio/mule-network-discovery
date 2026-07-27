@@ -14,6 +14,9 @@ import pandas as pd
 from network_mule_discovery.counterparty_schemas import (
     build_counterparty_identity,
 )
+from network_mule_discovery.decision_policy import (
+    COUNTERPARTY_ASSESSMENT_POLICY_VERSION,
+)
 from network_mule_discovery.raw_source_adapter import (
     RawDiscoverySources,
     load_raw_discovery_sources,
@@ -681,6 +684,9 @@ def build_behavioral_features(
             "subject_type": "COUNTERPARTY",
             "subject_key": counterparty_key,
             "run_date": str(resolved_run_date),
+            "counterparty_assessment_policy_version": (
+                COUNTERPARTY_ASSESSMENT_POLICY_VERSION
+            ),
             "aggregate_behavior": profile,
             "linked_customer_distribution": {
                 "customer_count": distinct_customer_count,

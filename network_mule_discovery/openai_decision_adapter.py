@@ -14,14 +14,21 @@ from network_mule_discovery.ai_decision_schemas import (
     CounterpartyDecisionAssessment,
     CustomerDecisionAssessment,
 )
+from network_mule_discovery.decision_policy import (
+    COUNTERPARTY_ASSESSMENT_POLICY_VERSION,
+    effective_prompt_version,
+)
 from network_mule_discovery.openai_config import (
     load_openai_settings,
 )
 
 
-COUNTERPARTY_SYSTEM_PROMPT = """
+COUNTERPARTY_SYSTEM_PROMPT = f"""
 You are the final counterparty decision engine for a bank
 mule-network discovery workflow.
+
+Assessment policy version:
+{COUNTERPARTY_ASSESSMENT_POLICY_VERSION}
 
 Make the final decision without analyst intervention.
 
@@ -29,16 +36,35 @@ Use only the supplied evidence payload. Do not invent
 transactions, identities, ownership, registry information,
 customer behavior, or fraud outcomes.
 
-A shared counterparty is candidate evidence only. Do not
-approve expansion solely because multiple customers use the
-same counterparty.
+A shared counterparty is candidate evidence only. Shared usage,
+even by multiple customers, is network topology and is never
+sufficient by itself for SUSPICIOUS_EXPAND.
 
-Decision definitions:
+Decision definitions and calibration:
 
 SUSPICIOUS_EXPAND:
-The evidence supports treating the external counterparty as
-a suspicious relationship and exposing linked customers for
-customer-level assessment.
+The evidence supports treating the external counterparty as a
+suspicious relationship and exposing linked customers for
+customer-level assessment. Normally require at least two
+independent corroborating evidence categories beyond shared
+usage, with at least one category showing suspicious behavior.
+
+Independent corroborating categories may include:
+- repeated, high-velocity, materially concentrated, or structured
+  transfer behavior;
+- rapid-drain, high flow-through, multi-source transit, or repeated
+  dispersal among linked customers;
+- abnormal beneficiary creation velocity or concentration;
+- repeated temporal clustering inconsistent with ordinary use;
+- independent known-bad or confirmed-mule overlap;
+- multiple linked customers showing their own corroborated
+  suspicious behavior.
+
+Do not count multiple metrics derived from the same underlying
+fact as independent categories. Generic payment purpose text, a
+young account, one transfer per customer, or the absence of a
+recurring legitimate pattern are not positive suspicious evidence.
+Absence of recurrence is not evidence of mule aggregation.
 
 LEGITIMATE_SUPPRESS:
 The evidence is more consistent with a plausible legitimate
@@ -49,12 +75,23 @@ The counterparty appears common, public, institutional, or
 otherwise unsuitable for network expansion.
 
 INSUFFICIENT_EVIDENCE_SUPPRESS:
-The evidence is insufficient to justify network expansion.
+The evidence is insufficient to justify network expansion. Use
+this when the evidence is sparse, one-off, low-volume, ambiguous,
+or consists mainly of shared usage without independent behavioral
+corroboration. This is the normal outcome when several customers
+each make only isolated payments and no rapid-drain, flow-through,
+beneficiary-velocity, known-bad, or repeated structured pattern is
+observed.
+
+Confidence calibration:
+Use HIGH only when multiple independent evidence categories
+strongly corroborate the decision. Sparse or one-off evidence must
+not receive HIGH confidence for SUSPICIOUS_EXPAND.
 
 Return a concise evidence-based rationale, a stable uppercase
 reason code, one to four key evidence statements, and a
-confidence level. Keep the rationale under 500 characters
-and each evidence statement under 160 characters.
+confidence level. Keep the rationale under 500 characters and
+each evidence statement under 160 characters.
 """.strip()
 
 
@@ -430,6 +467,29 @@ def _validate_feature_payload(
             "relationships list.",
         )
 
+    if subject_type == "COUNTERPARTY":
+        behavioral_evidence = payload.get(
+            "behavioral_evidence"
+        )
+
+        policy_version = (
+            behavioral_evidence.get(
+                "counterparty_assessment_policy_version"
+            )
+            if isinstance(behavioral_evidence, dict)
+            else None
+        )
+
+        if (
+            policy_version
+            != COUNTERPARTY_ASSESSMENT_POLICY_VERSION
+        ):
+            raise OpenAIDecisionError(
+                "EVIDENCE_POLICY_VERSION_MISMATCH",
+                "Counterparty evidence does not match "
+                "the active assessment policy version.",
+            )
+
     return payload
 
 
@@ -532,6 +592,11 @@ class OpenAIDecisionAdapter:
                 f"{subject_type}",
             )
 
+        resolved_prompt_version = effective_prompt_version(
+            subject_type=subject_type,
+            base_prompt_version=self.prompt_version,
+        )
+
         request_payload = {
             "subject_type": subject_type,
             "subject_key": subject_key,
@@ -597,7 +662,7 @@ class OpenAIDecisionAdapter:
             **metadata,
             "model": self.model,
             "prompt_version": (
-                self.prompt_version
+                resolved_prompt_version
             ),
             "subject_type": subject_type,
             "subject_key": subject_key,
@@ -711,7 +776,7 @@ class OpenAIDecisionAdapter:
             ) from exc
 
         decision_version = (
-            f"{self.prompt_version}:"
+            f"{resolved_prompt_version}:"
             f"{self.model}"
         )
 
