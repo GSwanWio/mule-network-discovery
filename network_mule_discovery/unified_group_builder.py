@@ -106,6 +106,8 @@ def build_unified_seed_groups(
     eid_discovery: EidDiscoveryResult,
     counterparty_discovery: CounterpartyDiscoveryResult,
     run_date: date | str,
+    *,
+    assess_eid_linked_customers: bool = True,
 ) -> UnifiedGroupResult:
     """
     Combine deterministic and candidate evidence into seed-led groups.
@@ -361,8 +363,12 @@ def build_unified_seed_groups(
             node_status=NODE_STATUS_EID,
             customer_assessment_status=(
                 ASSESSMENT_STATUS_PENDING
+                if assess_eid_linked_customers
+                else ASSESSMENT_STATUS_NOT_APPLICABLE
             ),
-            customer_discovery_allowed_flag=True,
+            customer_discovery_allowed_flag=(
+                assess_eid_linked_customers
+            ),
             expansion_source_flag=False,
             entity_type=row.candidate_entity_type,
             entity_id=row.candidate_entity_id,
@@ -378,7 +384,9 @@ def build_unified_seed_groups(
             relationship_status=(
                 RELATIONSHIP_STATUS_EID
             ),
-            customer_discovery_allowed_flag=True,
+            customer_discovery_allowed_flag=(
+                assess_eid_linked_customers
+            ),
             recursive_expansion_allowed_flag=False,
             evidence_key=row.emirates_id_number,
             evidence_summary=row.reason_code,

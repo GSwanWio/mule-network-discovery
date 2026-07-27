@@ -1271,8 +1271,13 @@ def apply_persisted_decisions(
             .isin(
                 DETERMINISTIC_CUSTOMER_EDGE_TYPES
             )
-            .any()
-        )
+            & incident_edges[
+                "customer_discovery_allowed_flag"
+            ]
+            .astype("string")
+            .str.upper()
+            .eq("TRUE")
+        ).any()
 
         approved_counterparty_eligible = (
             incident_edges["edge_type"]

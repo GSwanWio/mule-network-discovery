@@ -1,0 +1,1 @@
+transfer_id,quote_id,status,reference_number,source_account_id,direction,customer_id,transaction_timestamp,beneficiary_id,beneficiary_account_number,source_amount,target_amount,payment_purpose_key,payment_purpose_name,service_type,source_iban,total_fees,fee_details
