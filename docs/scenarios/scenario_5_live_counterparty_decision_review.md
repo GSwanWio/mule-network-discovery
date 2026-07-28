@@ -79,4 +79,3 @@ made zero additional AI calls.
 
 The model made both live decisions. No analyst approval, intervention, or
 manual outcome override was used.
-
