@@ -38,3 +38,45 @@ The intended interpretation is `INSUFFICIENT_EVIDENCE_SUPPRESS`. This outcome is
 ## Audit and persistence
 
 The review output contains the projected graph, decision store, frontier queue, AI call ledger, response/request identifiers, token usage, termination status, guardrail telemetry, and a compact JSON telemetry record. Runtime outputs remain excluded from Git.
+
+## Live policy-v2 validation outcome
+
+The first live assessment under the original counterparty policy produced:
+
+- Decision: `SUSPICIOUS_EXPAND`
+- Confidence: `HIGH`
+- Reason code: `MULTIPLE_ONE_OFF_CUSTOMERS_GOODS_SERVICES`
+- Feature snapshot hash: `a1eb74b5715dbfe88462bdbe5f6d8768cabd8dc9555ff1855d96f8f7049cbd26`
+
+This result exposed a policy-calibration gap: sparse shared usage and the
+absence of recurrence were being interpreted as positive suspicious
+evidence.
+
+The counterparty policy was then versioned as
+`counterparty-assessment-policy-v2`. The updated policy requires
+independent behavioral corroboration beyond shared-counterparty topology.
+
+The policy change generated a new feature snapshot hash:
+
+`b079fde12af1a1e7e24027a3564afc8af3e190bd5d09890104bd608cf57d6384`
+
+The original decision remained preserved as historical audit but was no
+longer applied.
+
+The controlled live reassessment under policy v2 produced:
+
+- Decision: `INSUFFICIENT_EVIDENCE_SUPPRESS`
+- Confidence: `HIGH`
+- Reason code: `ONE_OFF_SHARED_PAYMENTS_ONLY`
+- Suppressed non-seed relationships: `2`
+- Customer AI actions queued: `0`
+- Recursive sources queued: `0`
+- Observed graph nodes/edges preserved: `4/3`
+- Termination: `TERMINATED/FRONTIER_EXHAUSTED`
+
+The subsequent no-call rerun reused the persisted policy-v2 decision and
+made zero additional AI calls.
+
+The model made both live decisions. No analyst approval, intervention, or
+manual outcome override was used.
+
