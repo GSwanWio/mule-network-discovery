@@ -91,9 +91,27 @@ def validate_persisted_operational_state(
         label="network nodes",
     )
     _assert_unique(
+        frame=snapshot.network.nodes,
+        columns=(
+            "group_id",
+            "node_key",
+        ),
+        label="logical network nodes",
+    )
+    _assert_unique(
         frame=snapshot.network.edges,
         columns=("edge_id",),
         label="network edges",
+    )
+    _assert_unique(
+        frame=snapshot.network.edges,
+        columns=(
+            "group_id",
+            "edge_type",
+            "source_node_key",
+            "target_node_key",
+        ),
+        label="logical network edges",
     )
     _assert_unique(
         frame=snapshot.decision_store,
