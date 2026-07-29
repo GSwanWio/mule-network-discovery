@@ -24,6 +24,7 @@ class OperationalStateIntegrityReport:
     frontier_queue_count: int
     ai_call_count: int
     completed_ai_outcome_count: int
+    technical_requeue_count: int = 0
 
 
 def _require_columns(
@@ -83,6 +84,7 @@ def validate_persisted_operational_state(
     *,
     snapshot: DailyStateSnapshot,
     ai_call_ledger: pd.DataFrame,
+    technical_reprocessing_ledger: pd.DataFrame | None = None,
 ) -> OperationalStateIntegrityReport:
     """Validate uniqueness invariants required for safe restart."""
     _assert_unique(
@@ -168,6 +170,23 @@ def validate_persisted_operational_state(
         label="completed AI outcomes",
     )
 
+    if technical_reprocessing_ledger is None:
+        technical_reprocessing_ledger = pd.DataFrame()
+
+    _assert_unique(
+        frame=technical_reprocessing_ledger,
+        columns=("requeue_event_id",),
+        label="technical reprocessing ledger",
+    )
+    _assert_unique(
+        frame=technical_reprocessing_ledger,
+        columns=(
+            "queue_item_id",
+            "prior_attempt_count",
+        ),
+        label="technical reprocessing failure attempts",
+    )
+
     return OperationalStateIntegrityReport(
         node_count=len(snapshot.network.nodes),
         edge_count=len(snapshot.network.edges),
@@ -181,5 +200,8 @@ def validate_persisted_operational_state(
         ai_call_count=len(ai_call_ledger),
         completed_ai_outcome_count=len(
             completed_calls
+        ),
+        technical_requeue_count=len(
+            technical_reprocessing_ledger
         ),
     )
