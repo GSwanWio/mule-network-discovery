@@ -594,6 +594,169 @@ def _append_edge(
     )
 
 
+def _split_provenance_tokens(
+    values: pd.Series,
+    delimiter: str,
+) -> list[str]:
+    """Return sorted unique provenance tokens."""
+    tokens: set[str] = set()
+
+    for value in values:
+        if value is None or pd.isna(value):
+            continue
+
+        for token in str(value).split(delimiter):
+            normalized = token.strip()
+
+            if normalized:
+                tokens.add(normalized)
+
+    return sorted(tokens)
+
+
+def _max_optional_count(values: pd.Series) -> int | None:
+    """Return the largest nonblank count without duplicate inflation."""
+    numeric = pd.to_numeric(
+        values,
+        errors="coerce",
+    ).dropna()
+
+    if numeric.empty:
+        return None
+
+    return int(numeric.max())
+
+
+def _coalesce_logical_edges(
+    edges: pd.DataFrame,
+    *,
+    existing_edge_ids: set[str],
+) -> pd.DataFrame:
+    """Collapse duplicate logical edges while retaining provenance."""
+    if edges.empty:
+        return edges.copy()
+
+    logical_columns = [
+        "group_id",
+        "edge_type",
+        "source_node_key",
+        "target_node_key",
+    ]
+
+    missing_columns = sorted(
+        set(logical_columns) - set(edges.columns)
+    )
+
+    if missing_columns:
+        raise ValueError(
+            "Cannot coalesce edges missing columns: "
+            f"{missing_columns}"
+        )
+
+    coalesced_rows: list[pd.Series] = []
+
+    for _, group in edges.groupby(
+        logical_columns,
+        sort=False,
+        dropna=False,
+    ):
+        existing = group.loc[
+            group["edge_id"]
+            .astype("string")
+            .isin(existing_edge_ids)
+        ]
+
+        if existing.empty:
+            base = (
+                group
+                .sort_values(
+                    by=["edge_id"],
+                    kind="stable",
+                )
+                .iloc[0]
+                .copy()
+            )
+        else:
+            base = existing.iloc[0].copy()
+
+        if "evidence_key" in group.columns:
+            evidence_keys = _split_provenance_tokens(
+                group["evidence_key"],
+                "||",
+            )
+            base["evidence_key"] = "||".join(
+                evidence_keys
+            )
+
+        if "evidence_summary" in group.columns:
+            summaries = _split_provenance_tokens(
+                group["evidence_summary"],
+                " || ",
+            )
+            base["evidence_summary"] = " || ".join(
+                summaries
+            )
+
+        for column in (
+            "source_event_count",
+            "candidate_event_count",
+        ):
+            if column in group.columns:
+                base[column] = _max_optional_count(
+                    group[column]
+                )
+
+        for column in (
+            "customer_discovery_allowed_flag",
+            "recursive_expansion_allowed_flag",
+        ):
+            if column in group.columns:
+                normalized = (
+                    group[column]
+                    .astype("string")
+                    .str.strip()
+                    .str.lower()
+                )
+                base[column] = bool(
+                    normalized.isin(
+                        {"true", "1", "yes"}
+                    ).any()
+                )
+
+        if "first_seen_date" in group.columns:
+            first_seen = (
+                group["first_seen_date"]
+                .astype("string")
+                .str.strip()
+            )
+            first_seen = first_seen.loc[
+                first_seen.ne("")
+            ]
+
+            if not first_seen.empty:
+                base["first_seen_date"] = first_seen.min()
+
+        if "last_seen_date" in group.columns:
+            last_seen = (
+                group["last_seen_date"]
+                .astype("string")
+                .str.strip()
+            )
+            last_seen = last_seen.loc[
+                last_seen.ne("")
+            ]
+
+            if not last_seen.empty:
+                base["last_seen_date"] = last_seen.max()
+
+        coalesced_rows.append(base)
+
+    return pd.DataFrame(
+        coalesced_rows,
+        columns=edges.columns,
+    ).reset_index(drop=True)
+
+
 def _refresh_group_structure(
     graph: UnifiedGroupResult,
 ) -> UnifiedGroupResult:
@@ -748,6 +911,10 @@ def merge_expansion_relationships(
     groups = graph.groups.copy()
     nodes = graph.nodes.copy()
     edges = graph.edges.copy()
+    existing_edge_ids = set(
+        edges["edge_id"]
+        .astype("string")
+    ) if not edges.empty else set()
 
     new_edges: list[dict[str, Any]] = []
 
@@ -1047,13 +1214,9 @@ def merge_expansion_relationships(
         for row in nodes.itertuples(index=False)
     }
 
-    edges = (
-        edges
-        .drop_duplicates(
-            subset=["edge_id"],
-            keep="first",
-        )
-        .copy()
+    edges = _coalesce_logical_edges(
+        edges,
+        existing_edge_ids=existing_edge_ids,
     )
 
     edges["source_node_id"] = edges.apply(

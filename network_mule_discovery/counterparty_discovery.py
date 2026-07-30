@@ -28,6 +28,11 @@ SHARED_COUNTERPARTY_RELATIONSHIP_TYPE = (
     "SHARED_EXTERNAL_COUNTERPARTY"
 )
 
+BENEFICIARY_LINK_EVIDENCE_ADD_ONLY = "ADD_ONLY"
+BENEFICIARY_LINK_EVIDENCE_PAYMENT_BACKED = (
+    "PAYMENT_BACKED"
+)
+
 
 @dataclass(frozen=True)
 class CounterpartyDiscoveryResult:
@@ -567,20 +572,16 @@ def discover_counterparty_candidates(
         .copy()
     )
 
-    seed_account_records = (
-        seed_events.loc[
-            seed_events[
-                "seed_account_match_key"
-            ].notna(),
+    seed_account_base = (
+        seed_events[
             [
                 "seed_event_id",
                 "seed_customer_id",
                 "date_reported",
                 "frc_rail",
-                "seed_account_match_key",
                 "seed_account_number_normalized",
                 "seed_iban_normalized",
-            ],
+            ]
         ]
         .merge(
             seed_entity_resolution,
@@ -589,6 +590,76 @@ def discover_counterparty_candidates(
             validate="many_to_many",
         )
     )
+
+    seed_account_match_frames: list[pd.DataFrame] = []
+
+    iban_seed_accounts = seed_account_base.loc[
+        seed_account_base[
+            "seed_iban_normalized"
+        ].notna()
+    ].copy()
+
+    if not iban_seed_accounts.empty:
+        iban_seed_accounts[
+            "seed_account_match_key"
+        ] = (
+            "IBAN|"
+            + iban_seed_accounts[
+                "seed_iban_normalized"
+            ].astype("string")
+        )
+        iban_seed_accounts[
+            "seed_account_match_type"
+        ] = "IBAN"
+        seed_account_match_frames.append(
+            iban_seed_accounts
+        )
+
+    account_seed_accounts = seed_account_base.loc[
+        seed_account_base[
+            "seed_account_number_normalized"
+        ].notna()
+    ].copy()
+
+    if not account_seed_accounts.empty:
+        account_seed_accounts[
+            "seed_account_match_key"
+        ] = (
+            "ACCOUNT|"
+            + account_seed_accounts[
+                "seed_account_number_normalized"
+            ].astype("string")
+        )
+        account_seed_accounts[
+            "seed_account_match_type"
+        ] = "ACCOUNT"
+        seed_account_match_frames.append(
+            account_seed_accounts
+        )
+
+    if seed_account_match_frames:
+        seed_account_records = (
+            pd.concat(
+                seed_account_match_frames,
+                ignore_index=True,
+            )
+            .drop_duplicates(
+                subset=[
+                    "seed_event_id",
+                    "seed_entity_key",
+                    "seed_account_match_key",
+                ]
+            )
+            .reset_index(drop=True)
+        )
+    else:
+        seed_account_records = pd.DataFrame(
+            columns=[
+                *seed_account_base.columns,
+                "seed_account_match_key",
+                "seed_account_match_type",
+            ]
+        )
 
     beneficiary_seed_links = (
         beneficiary_events
@@ -617,6 +688,158 @@ def discover_counterparty_candidates(
                 ),
             }
         )
+    )
+
+    candidate_payments = (
+        transfer_events.loc[
+            transfer_events["event_type"].eq(
+                "TRANSFER_SENT"
+            )
+            & transfer_events[
+                "counterparty_account_match_key"
+            ].notna(),
+            [
+                "customer_id",
+                "beneficiary_id",
+                "counterparty_account_match_key",
+                "event_id",
+                "event_timestamp",
+                "amount",
+            ],
+        ]
+        .rename(
+            columns={
+                "customer_id": (
+                    "candidate_customer_id"
+                ),
+                "counterparty_account_match_key": (
+                    "seed_account_match_key"
+                ),
+                "event_id": (
+                    "beneficiary_payment_event_id"
+                ),
+                "event_timestamp": (
+                    "beneficiary_payment_timestamp"
+                ),
+                "amount": (
+                    "beneficiary_payment_amount"
+                ),
+            }
+        )
+    )
+
+    beneficiary_payment_events = (
+        beneficiary_seed_links[
+            [
+                "beneficiary_event_id",
+                "candidate_customer_id",
+                "beneficiary_id",
+                "seed_account_match_key",
+                "beneficiary_added_timestamp",
+            ]
+        ]
+        .merge(
+            candidate_payments,
+            how="inner",
+            on=[
+                "candidate_customer_id",
+                "beneficiary_id",
+                "seed_account_match_key",
+            ],
+            validate="many_to_many",
+        )
+    )
+
+    beneficiary_payment_events = (
+        beneficiary_payment_events.loc[
+            beneficiary_payment_events[
+                "beneficiary_payment_timestamp"
+            ].ge(
+                beneficiary_payment_events[
+                    "beneficiary_added_timestamp"
+                ]
+            )
+        ]
+        .copy()
+    )
+
+    payment_evidence = (
+        beneficiary_payment_events
+        .groupby(
+            [
+                "beneficiary_event_id",
+                "candidate_customer_id",
+                "seed_account_match_key",
+            ],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            beneficiary_payment_event_count=(
+                "beneficiary_payment_event_id",
+                "nunique",
+            ),
+            beneficiary_payment_event_ids=(
+                "beneficiary_payment_event_id",
+                _combine_text_values,
+            ),
+            beneficiary_first_payment_timestamp=(
+                "beneficiary_payment_timestamp",
+                "min",
+            ),
+            beneficiary_last_payment_timestamp=(
+                "beneficiary_payment_timestamp",
+                "max",
+            ),
+            beneficiary_payment_total_amount=(
+                "beneficiary_payment_amount",
+                _sum_amounts,
+            ),
+        )
+    )
+
+    beneficiary_seed_links = (
+        beneficiary_seed_links
+        .merge(
+            payment_evidence,
+            how="left",
+            on=[
+                "beneficiary_event_id",
+                "candidate_customer_id",
+                "seed_account_match_key",
+            ],
+            validate="many_to_one",
+        )
+    )
+
+    beneficiary_seed_links[
+        "beneficiary_payment_event_count"
+    ] = (
+        pd.to_numeric(
+            beneficiary_seed_links[
+                "beneficiary_payment_event_count"
+            ],
+            errors="coerce",
+        )
+        .fillna(0)
+        .astype(int)
+    )
+
+    beneficiary_seed_links[
+        "beneficiary_payment_backed_flag"
+    ] = beneficiary_seed_links[
+        "beneficiary_payment_event_count"
+    ].gt(0)
+
+    beneficiary_seed_links[
+        "beneficiary_link_evidence_type"
+    ] = beneficiary_seed_links[
+        "beneficiary_payment_backed_flag"
+    ].map(
+        {
+            True: BENEFICIARY_LINK_EVIDENCE_PAYMENT_BACKED,
+            False: BENEFICIARY_LINK_EVIDENCE_ADD_ONLY,
+        }
     )
 
     beneficiary_candidate_ids = sorted(

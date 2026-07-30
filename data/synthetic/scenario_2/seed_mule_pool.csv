@@ -1,0 +1,2 @@
+snapshot_date,seed_event_id,seed_customer_id,seed_account_id,seed_account_number,seed_iban,seed_entity_type,date_reported,seed_source,source_event_type,source_transaction_reference
+2026-07-20,S2-SEED-0001,R2001,ACC-R2001-001,220000000001,AE070330000220000000001,RETAIL,2026-07-01,FRC_CONFIRMED_MULE,SWIFT_RECALL,S2-FRC-TXN-0001

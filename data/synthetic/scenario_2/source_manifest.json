@@ -1,0 +1,46 @@
+{
+  "contains_ai_decisions": false,
+  "contains_prebuilt_edges": false,
+  "contains_prebuilt_groups": false,
+  "contains_prebuilt_nodes": false,
+  "design_reference": {
+    "common_public_counterparty_account": "770200000001",
+    "common_public_counterparty_name": "National Utility Services PJSC",
+    "non_seed_customer_count": 500,
+    "payments_per_customer": 5,
+    "seed_customer_id": "R2001",
+    "total_linked_customer_count": 501,
+    "total_recurring_payment_count": 2505
+  },
+  "generation_seed": 20260722,
+  "row_counts": {
+    "customer_account_master.csv": 501,
+    "customer_identity.csv": 501,
+    "local_inward_payments.csv": 2505,
+    "local_outward_payments.csv": 2505,
+    "retail_beneficiary_master.csv": 451,
+    "seed_mule_pool.csv": 1,
+    "sme_beneficiary_master.csv": 50
+  },
+  "run_date": "2026-07-20",
+  "scenario_name": "scenario_2_common_public_high_degree_hub",
+  "sha256": {
+    "customer_account_master.csv": "18a8a34370118f59261ed8f78b61d65c4bc7d91717c72c6d31356387d57aa834",
+    "customer_identity.csv": "0e81a9e4087b93bc58ba3a3595bd4c7c0e218fcac816653810fc5016e520f5a0",
+    "local_inward_payments.csv": "ea12d18e17148449a0113f7789ef1efecb23dffc8c34d01b543f818d8ecbe22d",
+    "local_outward_payments.csv": "dfeea3d55b671a9f4b0fa34e0415e1cb9264feaf1420aab6d1fd032dd021efe6",
+    "retail_beneficiary_master.csv": "21735623bcfe8881f71ff78e124c5ada2fb83b672fd018eb6a7284d480f26d94",
+    "seed_mule_pool.csv": "10177af8cd1070c321304937f41dfa64c88318477f1e8485762cd77b9d4b1261",
+    "sme_beneficiary_master.csv": "3de00582129d32c92a8b16bf5d3ed91092ec80cabf0bc10dbcd80c48f3d43d82"
+  },
+  "source_files": [
+    "customer_account_master.csv",
+    "customer_identity.csv",
+    "local_inward_payments.csv",
+    "local_outward_payments.csv",
+    "retail_beneficiary_master.csv",
+    "seed_mule_pool.csv",
+    "sme_beneficiary_master.csv"
+  ],
+  "source_only": true
+}
