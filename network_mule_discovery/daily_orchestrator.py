@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,9 @@ import pandas as pd
 from network_mule_discovery.bundle_behavioral_sources import (
     build_bundle_behavioral_sources,
     build_bundle_counterparty_payloads,
+)
+from network_mule_discovery.consolidated_state import (
+    ConsolidatedStateStore,
 )
 from network_mule_discovery.customer_behavioral_features import (
     build_customer_behavioral_features,
@@ -332,6 +336,31 @@ def run_counterparty_ai_phase(
             "settings must be DailyAiSettings."
         )
 
+    resolved_state_directory = Path(
+        state_directory
+    )
+
+    if (
+        reset_state
+        and resolved_state_directory.exists()
+    ):
+        shutil.rmtree(
+            resolved_state_directory
+        )
+
+    consolidated_store = ConsolidatedStateStore(
+        resolved_state_directory
+    )
+    consolidated_store.initialize(
+        initial_discovery
+        .source_preflight
+        .source_bundle
+        .metadata
+    )
+    consolidated_store.update_run_status(
+        run_status="RUNNING"
+    )
+
     graph_nodes = (
         initial_discovery
         .unified_groups
@@ -397,7 +426,9 @@ def run_counterparty_ai_phase(
         "supplemental_subject_payloads": (
             counterparty_payloads
         ),
-        "state_directory": state_directory,
+        "state_directory": (
+            resolved_state_directory
+        ),
         "run_date": (
             initial_discovery
             .source_preflight
@@ -406,7 +437,7 @@ def run_counterparty_ai_phase(
             .run_date
         ),
         "settings": settings,
-        "reset_state": reset_state,
+        "reset_state": False,
     }
 
     if adapter_factory is not None:
@@ -945,6 +976,45 @@ def _discovery_group_ids(
     return group_ids
 
 
+def _persist_run_outcome(
+    *,
+    state_directory: Path | str,
+    termination_status: str,
+    termination_reason: str,
+) -> None:
+    """Persist the final status of the current logical run."""
+    normalized_status = str(
+        termination_status
+    ).strip().upper()
+    normalized_reason = str(
+        termination_reason
+    ).strip()
+
+    if normalized_status not in {
+        "STOPPED",
+        "TERMINATED",
+    }:
+        raise SourceContractError(
+            "Unsupported final run status: "
+            f"{normalized_status}"
+        )
+
+    if not normalized_reason:
+        raise SourceContractError(
+            "Final termination reason must be nonblank."
+        )
+
+    consolidated_store = ConsolidatedStateStore(
+        state_directory
+    )
+    consolidated_store.update_run_status(
+        run_status=normalized_status,
+        termination_status=normalized_status,
+        termination_reason=normalized_reason,
+    )
+    consolidated_store.snapshot_current_run()
+
+
 def run_breadth_first_frontier(
     *,
     customer_phase: DailyCustomerAiPhaseResult,
@@ -1045,6 +1115,16 @@ def run_breadth_first_frontier(
                 )
             )
 
+            _persist_run_outcome(
+                state_directory=(
+                    resolved_state_directory
+                ),
+                termination_status="STOPPED",
+                termination_reason=(
+                    "FAILED_CLOSED_FRONTIER"
+                ),
+            )
+
             return DailyBreadthFirstRunResult(
                 customer_phase=customer_phase,
                 steps=tuple(steps),
@@ -1078,6 +1158,14 @@ def run_breadth_first_frontier(
                     step_number=step_number,
                     selection=selection,
                 )
+            )
+
+            _persist_run_outcome(
+                state_directory=(
+                    resolved_state_directory
+                ),
+                termination_status=status,
+                termination_reason=reason,
             )
 
             return DailyBreadthFirstRunResult(
@@ -1158,6 +1246,14 @@ def run_breadth_first_frontier(
                         step_number=step_number,
                         selection=selection,
                     )
+                )
+
+                _persist_run_outcome(
+                    state_directory=(
+                        resolved_state_directory
+                    ),
+                    termination_status=status,
+                    termination_reason=reason,
                 )
 
                 return DailyBreadthFirstRunResult(
@@ -1290,6 +1386,14 @@ def run_breadth_first_frontier(
         run_date=run_date,
         supplemental_subject_payloads=(
             supplemental_payloads
+        ),
+    )
+
+    _persist_run_outcome(
+        state_directory=resolved_state_directory,
+        termination_status="STOPPED",
+        termination_reason=(
+            "MAX_FRONTIER_STEPS_REACHED"
         ),
     )
 
