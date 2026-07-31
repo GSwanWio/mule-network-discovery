@@ -25,6 +25,7 @@ from network_mule_discovery.decision_engine import (
     DecisionProjectionResult,
 )
 from network_mule_discovery.raw_source_adapter import (
+    RawDiscoverySources,
     load_raw_discovery_sources,
 )
 from network_mule_discovery.schemas import parse_run_date
@@ -408,17 +409,113 @@ def _assessment_context(
     }
 
 
+
+def _international_customer_activity_records(
+    *,
+    activity: pd.DataFrame | None,
+    customer_id: str,
+) -> list[dict[str, object]]:
+    """Return currency-separated international customer evidence."""
+    if activity is None:
+        return []
+
+    required_columns = {
+        "customer_id",
+        "direction",
+        "currency",
+        "event_count",
+        "total_amount",
+        "distinct_counterparty_count",
+    }
+
+    missing_columns = sorted(
+        required_columns - set(activity.columns)
+    )
+
+    if missing_columns:
+        raise BehavioralFeatureError(
+            "International customer activity "
+            f"is missing columns: {missing_columns}"
+        )
+
+    current = activity.loc[
+        activity["customer_id"]
+        .astype("string")
+        .str.strip()
+        .eq(customer_id)
+    ].copy()
+
+    current = current.sort_values(
+        by=[
+            "direction",
+            "currency",
+        ],
+        kind="stable",
+    )
+
+    return [
+        {
+            "direction": str(row.direction),
+            "currency": str(row.currency),
+            "event_count": int(row.event_count),
+            "total_amount": float(row.total_amount),
+            "distinct_counterparty_count": int(
+                row.distinct_counterparty_count
+            ),
+        }
+        for row in current.itertuples(index=False)
+    ]
+
 def build_customer_behavioral_features(
     *,
-    source_directory: Path | str,
     customer_keys: Iterable[str],
     projection: DecisionProjectionResult,
     run_date: date | str,
+    source_directory: Path | str | None = None,
+    raw_sources: RawDiscoverySources | None = None,
+    international_customer_currency_activity: (
+        pd.DataFrame | None
+    ) = None,
 ) -> CustomerBehavioralFeatureResult:
     """Build bounded neutral evidence for one customer AI frontier."""
     resolved_run_date = parse_run_date(run_date)
-    sources = load_raw_discovery_sources(source_directory)
-    prepared = _prepare_sources(sources, resolved_run_date)
+    if (
+        source_directory is None
+        and raw_sources is None
+    ):
+        raise BehavioralFeatureError(
+            "Either source_directory or raw_sources "
+            "must be provided."
+        )
+
+    if (
+        source_directory is not None
+        and raw_sources is not None
+    ):
+        raise BehavioralFeatureError(
+            "Provide source_directory or raw_sources, "
+            "not both."
+        )
+
+    if raw_sources is not None:
+        if not isinstance(
+            raw_sources,
+            RawDiscoverySources,
+        ):
+            raise BehavioralFeatureError(
+                "raw_sources must be RawDiscoverySources."
+            )
+
+        resolved_sources = raw_sources
+    else:
+        resolved_sources = load_raw_discovery_sources(
+            source_directory
+        )
+
+    prepared = _prepare_sources(
+        resolved_sources,
+        resolved_run_date,
+    )
 
     customer_lookup = _resolve_customer_lookup(
         customer_keys=customer_keys,
@@ -624,6 +721,14 @@ def build_customer_behavioral_features(
                     }
                 )
             },
+            "international_currency_activity": (
+                _international_customer_activity_records(
+                    activity=(
+                        international_customer_currency_activity
+                    ),
+                    customer_id=customer_id,
+                )
+            ),
             "salary_behavior": salary_metrics,
             "beneficiary_behavior": {
                 key: value
