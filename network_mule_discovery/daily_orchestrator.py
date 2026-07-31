@@ -30,15 +30,20 @@ from network_mule_discovery.frontier_ai import (
 )
 from network_mule_discovery.frontier_termination import (
     FrontierTerminationResult,
+    run_frontier_exhaustion_termination,
 )
 from network_mule_discovery.recursive_counterparty_frontier import (
     RecursiveCounterpartyFrontierResult,
+    discover_recursive_counterparties,
+    run_recursive_counterparty_frontier,
 )
 from network_mule_discovery.recursive_customer_frontier import (
     RecursiveCustomerFrontierResult,
+    run_recursive_customer_frontier,
 )
 from network_mule_discovery.recursive_termination import (
     RecursiveTerminationResult,
+    run_recursive_termination,
 )
 from network_mule_discovery.bundle_source_adapter import (
     build_canonical_discovery_inputs_from_bundle,
@@ -754,3 +759,532 @@ class DailyBreadthFirstRunResult:
     frontier_termination: (
         FrontierTerminationResult | None
     ) = None
+
+def _merge_supplemental_payloads(
+    *frames: pd.DataFrame,
+) -> pd.DataFrame:
+    """Combine subject evidence with one row per subject."""
+    required_columns = {
+        "subject_type",
+        "subject_key",
+        "feature_payload_json",
+    }
+
+    prepared_frames: list[pd.DataFrame] = []
+
+    for frame in frames:
+        missing_columns = sorted(
+            required_columns - set(frame.columns)
+        )
+
+        if missing_columns:
+            raise SourceContractError(
+                "Supplemental payload frame is missing "
+                f"columns: {missing_columns}"
+            )
+
+        if not frame.empty:
+            prepared_frames.append(
+                frame[
+                    [
+                        "subject_type",
+                        "subject_key",
+                        "feature_payload_json",
+                    ]
+                ].copy()
+            )
+
+    if not prepared_frames:
+        return pd.DataFrame(
+            columns=[
+                "subject_type",
+                "subject_key",
+                "feature_payload_json",
+            ]
+        )
+
+    return (
+        pd.concat(
+            prepared_frames,
+            ignore_index=True,
+        )
+        .drop_duplicates(
+            subset=[
+                "subject_type",
+                "subject_key",
+            ],
+            keep="last",
+        )
+        .sort_values(
+            by=[
+                "subject_type",
+                "subject_key",
+            ],
+            kind="stable",
+        )
+        .reset_index(drop=True)
+    )
+
+
+def _termination_values(
+    termination_status: pd.DataFrame,
+) -> tuple[str, str]:
+    """Resolve one consistent persisted termination outcome."""
+    required_columns = {
+        "termination_status",
+        "termination_reason",
+    }
+
+    missing_columns = sorted(
+        required_columns - set(termination_status.columns)
+    )
+
+    if missing_columns:
+        raise SourceContractError(
+            "Termination status is missing columns: "
+            f"{missing_columns}"
+        )
+
+    if termination_status.empty:
+        raise SourceContractError(
+            "Termination status cannot be empty."
+        )
+
+    statuses = tuple(
+        sorted({
+            str(value).strip()
+            for value in termination_status[
+                "termination_status"
+            ]
+            if str(value).strip()
+        })
+    )
+    reasons = tuple(
+        sorted({
+            str(value).strip()
+            for value in termination_status[
+                "termination_reason"
+            ]
+            if str(value).strip()
+        })
+    )
+
+    if len(statuses) != 1 or len(reasons) != 1:
+        raise SourceContractError(
+            "Termination status must contain one "
+            "consistent status and reason."
+        )
+
+    return statuses[0], reasons[0]
+
+
+def _discovery_group_ids(
+    actionable_queue: pd.DataFrame,
+    source_entity_key: str,
+) -> tuple[str, ...]:
+    """Resolve all group IDs for one recursive source."""
+    required_columns = {
+        "action_type",
+        "subject_key",
+        "group_ids",
+    }
+
+    missing_columns = sorted(
+        required_columns - set(actionable_queue.columns)
+    )
+
+    if missing_columns:
+        raise SourceContractError(
+            "Recursive discovery queue is missing "
+            f"columns: {missing_columns}"
+        )
+
+    rows = actionable_queue.loc[
+        actionable_queue["action_type"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+        .eq("DISCOVER_CUSTOMER_RELATIONSHIPS")
+        & actionable_queue["subject_key"]
+        .astype("string")
+        .str.strip()
+        .eq(source_entity_key)
+    ]
+
+    group_ids = tuple(
+        sorted({
+            group_id
+            for value in rows["group_ids"]
+            for group_id in str(value).split("|")
+            if group_id
+        })
+    )
+
+    if not group_ids:
+        raise SourceContractError(
+            "Recursive discovery source has no group IDs."
+        )
+
+    return group_ids
+
+
+def run_breadth_first_frontier(
+    *,
+    customer_phase: DailyCustomerAiPhaseResult,
+    state_directory: Path | str,
+    ai_settings: DailyAiSettings,
+    breadth_first_settings: DailyBreadthFirstSettings,
+    counterparty_adapter_factory=None,
+    customer_adapter_factory=None,
+) -> DailyBreadthFirstRunResult:
+    """Advance one persisted breadth-first phase per step."""
+    if not isinstance(
+        customer_phase,
+        DailyCustomerAiPhaseResult,
+    ):
+        raise SourceContractError(
+            "customer_phase must be a "
+            "DailyCustomerAiPhaseResult."
+        )
+
+    if not isinstance(
+        ai_settings,
+        DailyAiSettings,
+    ):
+        raise SourceContractError(
+            "ai_settings must be DailyAiSettings."
+        )
+
+    if not isinstance(
+        breadth_first_settings,
+        DailyBreadthFirstSettings,
+    ):
+        raise SourceContractError(
+            "breadth_first_settings must be "
+            "DailyBreadthFirstSettings."
+        )
+
+    initial_discovery = (
+        customer_phase
+        .counterparty_phase
+        .initial_discovery
+    )
+    source_bundle = (
+        initial_discovery
+        .source_preflight
+        .source_bundle
+    )
+    run_date = source_bundle.metadata.run_date
+    resolved_state_directory = Path(
+        state_directory
+    )
+    state_store = CsvDailyStateStore(
+        resolved_state_directory
+    )
+    behavioral_sources = (
+        build_bundle_behavioral_sources(
+            source_bundle
+        )
+    )
+    supplemental_payloads = (
+        _merge_supplemental_payloads(
+            customer_phase
+            .supplemental_subject_payloads
+        )
+    )
+    steps: list[
+        DailyBreadthFirstStepResult
+    ] = []
+
+    for step_number in range(
+        1,
+        (
+            breadth_first_settings
+            .max_frontier_steps
+            + 1
+        ),
+    ):
+        plan = build_incremental_daily_plan(
+            state_store=state_store,
+            run_date=run_date,
+            supplemental_subject_payloads=(
+                supplemental_payloads
+            ),
+        )
+        selection = select_next_frontier_action(
+            actionable_queue=(
+                plan.actionable_queue
+            ),
+            failed_closed_item_count=(
+                plan.failed_closed_item_count
+            ),
+        )
+
+        if selection.action_type == "FAIL_CLOSED":
+            steps.append(
+                DailyBreadthFirstStepResult(
+                    step_number=step_number,
+                    selection=selection,
+                )
+            )
+
+            return DailyBreadthFirstRunResult(
+                customer_phase=customer_phase,
+                steps=tuple(steps),
+                supplemental_subject_payloads=(
+                    supplemental_payloads
+                ),
+                final_plan=plan,
+                termination_status="STOPPED",
+                termination_reason=(
+                    "FAILED_CLOSED_FRONTIER"
+                ),
+            )
+
+        if selection.action_type == "TERMINATE_FRONTIER":
+            termination = (
+                run_frontier_exhaustion_termination(
+                    state_directory=(
+                        resolved_state_directory
+                    ),
+                    run_date=run_date,
+                    supplemental_subject_payloads=(
+                        supplemental_payloads
+                    ),
+                )
+            )
+            status, reason = _termination_values(
+                termination.termination_status
+            )
+            steps.append(
+                DailyBreadthFirstStepResult(
+                    step_number=step_number,
+                    selection=selection,
+                )
+            )
+
+            return DailyBreadthFirstRunResult(
+                customer_phase=customer_phase,
+                steps=tuple(steps),
+                supplemental_subject_payloads=(
+                    supplemental_payloads
+                ),
+                final_plan=termination.final_plan,
+                termination_status=status,
+                termination_reason=reason,
+                frontier_termination=termination,
+            )
+
+        if (
+            selection.action_type
+            == "DISCOVER_CUSTOMER_RELATIONSHIPS"
+        ):
+            source_entity_key = (
+                selection.subject_keys[0]
+            )
+            group_ids = _discovery_group_ids(
+                actionable_queue=(
+                    plan.actionable_queue
+                ),
+                source_entity_key=(
+                    source_entity_key
+                ),
+            )
+            snapshot = state_store.load_snapshot()
+            discovery_preview = (
+                discover_recursive_counterparties(
+                    observed_network=(
+                        snapshot.network
+                    ),
+                    source_entity_key=(
+                        source_entity_key
+                    ),
+                    group_ids=group_ids,
+                    run_date=run_date,
+                    raw_sources=(
+                        behavioral_sources
+                        .raw_sources
+                    ),
+                )
+            )
+
+            if (
+                not discovery_preview
+                .new_counterparty_keys
+                and discovery_preview
+                .relationships
+                .empty
+            ):
+                termination = (
+                    run_recursive_termination(
+                        state_directory=(
+                            resolved_state_directory
+                        ),
+                        run_date=run_date,
+                        supplemental_subject_payloads=(
+                            supplemental_payloads
+                        ),
+                        raw_sources=(
+                            behavioral_sources
+                            .raw_sources
+                        ),
+                    )
+                )
+                status, reason = (
+                    _termination_values(
+                        termination
+                        .termination_status
+                    )
+                )
+                steps.append(
+                    DailyBreadthFirstStepResult(
+                        step_number=step_number,
+                        selection=selection,
+                    )
+                )
+
+                return DailyBreadthFirstRunResult(
+                    customer_phase=customer_phase,
+                    steps=tuple(steps),
+                    supplemental_subject_payloads=(
+                        supplemental_payloads
+                    ),
+                    final_plan=(
+                        termination.final_plan
+                    ),
+                    termination_status=status,
+                    termination_reason=reason,
+                    recursive_termination=(
+                        termination
+                    ),
+                )
+
+        if selection.action_type in {
+            "RUN_COUNTERPARTY_AI",
+            "DISCOVER_CUSTOMER_RELATIONSHIPS",
+        }:
+            run_kwargs = {
+                "state_directory": (
+                    resolved_state_directory
+                ),
+                "run_date": run_date,
+                "supplemental_subject_payloads": (
+                    supplemental_payloads
+                ),
+                "settings": ai_settings,
+                "raw_sources": (
+                    behavioral_sources
+                    .raw_sources
+                ),
+                "international_counterparty_currency_activity": (
+                    behavioral_sources
+                    .international_counterparty_currency_activity
+                ),
+            }
+
+            if counterparty_adapter_factory is not None:
+                run_kwargs[
+                    "adapter_factory"
+                ] = counterparty_adapter_factory
+
+            recursive_counterparty = (
+                run_recursive_counterparty_frontier(
+                    **run_kwargs
+                )
+            )
+            supplemental_payloads = (
+                _merge_supplemental_payloads(
+                    supplemental_payloads,
+                    recursive_counterparty
+                    .new_features
+                    .counterparty_payloads,
+                )
+            )
+            steps.append(
+                DailyBreadthFirstStepResult(
+                    step_number=step_number,
+                    selection=selection,
+                    recursive_counterparty=(
+                        recursive_counterparty
+                    ),
+                )
+            )
+            continue
+
+        if selection.action_type == "RUN_CUSTOMER_AI":
+            run_kwargs = {
+                "state_directory": (
+                    resolved_state_directory
+                ),
+                "run_date": run_date,
+                "supplemental_subject_payloads": (
+                    supplemental_payloads
+                ),
+                "settings": ai_settings,
+                "raw_sources": (
+                    behavioral_sources
+                    .raw_sources
+                ),
+                "international_customer_currency_activity": (
+                    behavioral_sources
+                    .international_customer_currency_activity
+                ),
+                "customer_keys": (
+                    selection.subject_keys
+                ),
+            }
+
+            if customer_adapter_factory is not None:
+                run_kwargs[
+                    "adapter_factory"
+                ] = customer_adapter_factory
+
+            recursive_customer = (
+                run_recursive_customer_frontier(
+                    **run_kwargs
+                )
+            )
+            supplemental_payloads = (
+                _merge_supplemental_payloads(
+                    supplemental_payloads,
+                    recursive_customer
+                    .new_features
+                    .customer_payloads,
+                )
+            )
+            steps.append(
+                DailyBreadthFirstStepResult(
+                    step_number=step_number,
+                    selection=selection,
+                    recursive_customer=(
+                        recursive_customer
+                    ),
+                )
+            )
+            continue
+
+        raise SourceContractError(
+            "The selected frontier phase was not handled: "
+            f"{selection.action_type}"
+        )
+
+    final_plan = build_incremental_daily_plan(
+        state_store=state_store,
+        run_date=run_date,
+        supplemental_subject_payloads=(
+            supplemental_payloads
+        ),
+    )
+
+    return DailyBreadthFirstRunResult(
+        customer_phase=customer_phase,
+        steps=tuple(steps),
+        supplemental_subject_payloads=(
+            supplemental_payloads
+        ),
+        final_plan=final_plan,
+        termination_status="STOPPED",
+        termination_reason=(
+            "MAX_FRONTIER_STEPS_REACHED"
+        ),
+    )
