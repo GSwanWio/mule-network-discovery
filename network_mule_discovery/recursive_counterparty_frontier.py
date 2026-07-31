@@ -32,6 +32,7 @@ from network_mule_discovery.frontier_ai import (
     run_counterparty_ai_frontier,
 )
 from network_mule_discovery.raw_source_adapter import (
+    RawDiscoverySources,
     load_raw_discovery_sources,
 )
 from network_mule_discovery.recursive_expansion import (
@@ -78,6 +79,33 @@ class RecursiveCounterpartyFrontierResult:
     ai_call_ledger: pd.DataFrame
     guardrail_telemetry: pd.DataFrame
 
+
+
+def _resolve_raw_sources(
+    *,
+    source_directory: Path | str | None,
+    raw_sources: RawDiscoverySources | None,
+) -> RawDiscoverySources:
+    """Resolve exactly one recursive source interface."""
+    if source_directory is None and raw_sources is None:
+        raise RecursiveCounterpartyFrontierError(
+            "Either source_directory or raw_sources must be provided."
+        )
+
+    if source_directory is not None and raw_sources is not None:
+        raise RecursiveCounterpartyFrontierError(
+            "Provide source_directory or raw_sources, not both."
+        )
+
+    if raw_sources is not None:
+        if not isinstance(raw_sources, RawDiscoverySources):
+            raise RecursiveCounterpartyFrontierError(
+                "raw_sources must be RawDiscoverySources."
+            )
+
+        return raw_sources
+
+    return load_raw_discovery_sources(source_directory)
 
 def _stable_id(prefix: str, *values: object) -> str:
     canonical = "|".join(str(value) for value in values)
@@ -256,11 +284,12 @@ def _counterparty_name_lookup(
 
 def discover_recursive_counterparties(
     *,
-    source_directory: Path | str,
     observed_network: UnifiedGroupResult,
     source_entity_key: str,
     group_ids: list[str] | tuple[str, ...],
     run_date: date | str,
+    source_directory: Path | str | None = None,
+    raw_sources: RawDiscoverySources | None = None,
 ) -> RecursiveCounterpartyDiscoveryResult:
     """Find unseen counterparties shared by one approved source."""
     resolved_run_date = parse_run_date(run_date)
@@ -287,7 +316,10 @@ def discover_recursive_counterparties(
             f"group: {source_entity_key}"
         )
 
-    sources = load_raw_discovery_sources(source_directory)
+    sources = _resolve_raw_sources(
+        source_directory=source_directory,
+        raw_sources=raw_sources,
+    )
     identity_lookup = _prepare_identity_lookup(
         sources.customer_identity
     )
@@ -919,15 +951,23 @@ def _resume_discovery_from_state(
 
 def run_recursive_counterparty_frontier(
     *,
-    source_directory: Path | str,
     state_directory: Path | str,
     run_date: date | str,
     supplemental_subject_payloads: pd.DataFrame,
     settings: DailyAiSettings,
+    source_directory: Path | str | None = None,
+    raw_sources: RawDiscoverySources | None = None,
+    international_counterparty_currency_activity: (
+        pd.DataFrame | None
+    ) = None,
     adapter_factory=None,
 ) -> RecursiveCounterpartyFrontierResult:
     """Consume approved discovery work and run new counterparty AI."""
     resolved_run_date = parse_run_date(run_date)
+    resolved_sources = _resolve_raw_sources(
+        source_directory=source_directory,
+        raw_sources=raw_sources,
+    )
     state_store = CsvDailyStateStore(state_directory)
 
     try:
@@ -971,7 +1011,7 @@ def run_recursive_counterparty_frontier(
             )
         )
         discovery = discover_recursive_counterparties(
-            source_directory=source_directory,
+            raw_sources=resolved_sources,
             observed_network=snapshot.network,
             source_entity_key=source_entity_key,
             group_ids=source_group_ids,
@@ -1038,7 +1078,10 @@ def run_recursive_counterparty_frontier(
         new_edge_count = 0
 
     new_features = build_behavioral_features(
-        source_directory=source_directory,
+        raw_sources=resolved_sources,
+        international_counterparty_currency_activity=(
+            international_counterparty_currency_activity
+        ),
         counterparty_keys=(
             discovery.new_counterparty_keys
         ),

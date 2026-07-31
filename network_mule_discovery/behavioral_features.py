@@ -354,11 +354,67 @@ def _customer_window_metrics(
     return metrics
 
 
+
+def _international_counterparty_activity_records(
+    *,
+    activity: pd.DataFrame | None,
+    counterparty_key: str,
+) -> list[dict[str, object]]:
+    """Return currency-separated international evidence."""
+    if activity is None:
+        return []
+
+    required_columns = {
+        "counterparty_key",
+        "currency",
+        "event_count",
+        "total_amount",
+        "distinct_customer_count",
+    }
+
+    missing_columns = sorted(
+        required_columns - set(activity.columns)
+    )
+
+    if missing_columns:
+        raise BehavioralFeatureError(
+            "International counterparty activity "
+            f"is missing columns: {missing_columns}"
+        )
+
+    current = activity.loc[
+        activity["counterparty_key"]
+        .astype("string")
+        .str.strip()
+        .eq(counterparty_key)
+    ].copy()
+
+    current = current.sort_values(
+        by=["currency"],
+        kind="stable",
+    )
+
+    return [
+        {
+            "currency": str(row.currency),
+            "event_count": int(row.event_count),
+            "total_amount": float(row.total_amount),
+            "distinct_customer_count": int(
+                row.distinct_customer_count
+            ),
+        }
+        for row in current.itertuples(index=False)
+    ]
+
 def build_behavioral_features(
     *,
-    source_directory: Path | str,
     counterparty_keys: Iterable[str],
     run_date: date | str,
+    source_directory: Path | str | None = None,
+    raw_sources: RawDiscoverySources | None = None,
+    international_counterparty_currency_activity: (
+        pd.DataFrame | None
+    ) = None,
 ) -> BehavioralFeatureResult:
     """Build neutral evidence for an observed counterparty frontier."""
     resolved_run_date = parse_run_date(run_date)
@@ -375,8 +431,43 @@ def build_behavioral_features(
             "At least one counterparty key is required."
         )
 
-    sources = load_raw_discovery_sources(source_directory)
-    prepared = _prepare_sources(sources, resolved_run_date)
+    if (
+        source_directory is None
+        and raw_sources is None
+    ):
+        raise BehavioralFeatureError(
+            "Either source_directory or raw_sources "
+            "must be provided."
+        )
+
+    if (
+        source_directory is not None
+        and raw_sources is not None
+    ):
+        raise BehavioralFeatureError(
+            "Provide source_directory or raw_sources, "
+            "not both."
+        )
+
+    if raw_sources is not None:
+        if not isinstance(
+            raw_sources,
+            RawDiscoverySources,
+        ):
+            raise BehavioralFeatureError(
+                "raw_sources must be RawDiscoverySources."
+            )
+
+        resolved_sources = raw_sources
+    else:
+        resolved_sources = load_raw_discovery_sources(
+            source_directory
+        )
+
+    prepared = _prepare_sources(
+        resolved_sources,
+        resolved_run_date,
+    )
 
     outward = prepared["outward"]
     inward = prepared["inward"]
@@ -686,6 +777,14 @@ def build_behavioral_features(
             "run_date": str(resolved_run_date),
             "counterparty_assessment_policy_version": (
                 COUNTERPARTY_ASSESSMENT_POLICY_VERSION
+            ),
+            "international_currency_activity": (
+                _international_counterparty_activity_records(
+                    activity=(
+                        international_counterparty_currency_activity
+                    ),
+                    counterparty_key=counterparty_key,
+                )
             ),
             "aggregate_behavior": profile,
             "linked_customer_distribution": {

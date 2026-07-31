@@ -25,6 +25,9 @@ from network_mule_discovery.frontier_ai import (
     CustomerFrontierRunResult,
     run_customer_ai_frontier,
 )
+from network_mule_discovery.raw_source_adapter import (
+    RawDiscoverySources,
+)
 from network_mule_discovery.recursive_counterparty_frontier import (
     build_guardrail_telemetry,
 )
@@ -108,11 +111,15 @@ def _resolve_customer_keys(
 
 def run_recursive_customer_frontier(
     *,
-    source_directory: Path | str,
     state_directory: Path | str,
     run_date: date | str,
     supplemental_subject_payloads: pd.DataFrame,
     settings: DailyAiSettings,
+    source_directory: Path | str | None = None,
+    raw_sources: RawDiscoverySources | None = None,
+    international_customer_currency_activity: (
+        pd.DataFrame | None
+    ) = None,
     customer_keys: Iterable[str] | None = None,
     adapter_factory=None,
 ) -> RecursiveCustomerFrontierResult:
@@ -161,6 +168,10 @@ def run_recursive_customer_frontier(
     )
     new_features = build_customer_behavioral_features(
         source_directory=source_directory,
+        raw_sources=raw_sources,
+        international_customer_currency_activity=(
+            international_customer_currency_activity
+        ),
         customer_keys=resolved_customer_keys,
         projection=preflight.projection,
         run_date=resolved_run_date,
