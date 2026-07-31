@@ -36,68 +36,12 @@ from network_mule_discovery.source_snapshot import (
 )
 
 
-class ScenarioOneProvider:
-    """Test-local provider for Scenario 1 source files."""
+from network_mule_discovery.synthetic_source_provider import (
+    SyntheticSourceProvider,
+)
 
-    def __init__(
-        self,
-        source_directory: Path,
-        source_manifest: dict[str, object],
-    ) -> None:
-        self.source_directory = source_directory
-        self.source_manifest = source_manifest
-        self.load_count = 0
 
-    @property
-    def provider_name(self) -> str:
-        return "synthetic"
-
-    def load(
-        self,
-        request: SourceLoadRequest,
-    ) -> DiscoverySourceBundle:
-        self.load_count += 1
-        frames = {}
-
-        for dataset_name in SOURCE_DATASET_NAMES:
-            source_path = (
-                self.source_directory
-                / f"{dataset_name}.csv"
-            )
-
-            if source_path.is_file():
-                frames[dataset_name] = pd.read_csv(
-                    source_path,
-                    dtype="string",
-                    keep_default_na=False,
-                )
-            else:
-                frames[dataset_name] = pd.DataFrame(
-                    columns=SOURCE_DATASET_CONTRACTS[
-                        dataset_name
-                    ].columns
-                )
-
-        snapshot_hash = calculate_source_snapshot_hash(
-            dataset_id=request.dataset_id,
-            run_date=request.run_date,
-            frames=frames,
-        )
-
-        return DiscoverySourceBundle(
-            metadata=SourceMetadata(
-                provider_name=self.provider_name,
-                dataset_id=request.dataset_id,
-                run_date=request.run_date,
-                state_namespace=(
-                    request.state_namespace
-                ),
-                source_manifest=self.source_manifest,
-                source_snapshot_hash=snapshot_hash,
-            ),
-            **frames,
-        )
-
+ScenarioOneProvider = SyntheticSourceProvider
 
 def main() -> None:
     with TemporaryDirectory() as temporary_directory:
