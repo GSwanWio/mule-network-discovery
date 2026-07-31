@@ -84,11 +84,19 @@ def main() -> None:
             adapter_factory=forbidden_factory,
         )
 
-        expected_counterparties = (
+        graph_nodes = (
             initial_discovery
-            .counterparty_discovery
-            .seed_counterparties[
-                "counterparty_key"
+            .unified_groups
+            .nodes
+        )
+        expected_counterparties = (
+            graph_nodes.loc[
+                graph_nodes["node_type"]
+                .astype("string")
+                .str.strip()
+                .str.upper()
+                .eq("COUNTERPARTY"),
+                "counterparty_key",
             ]
             .astype("string")
             .str.strip()

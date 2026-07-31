@@ -332,21 +332,38 @@ def run_counterparty_ai_phase(
             "settings must be DailyAiSettings."
         )
 
-    seed_counterparties = (
+    graph_nodes = (
         initial_discovery
-        .counterparty_discovery
-        .seed_counterparties
+        .unified_groups
+        .nodes
     )
 
-    if "counterparty_key" not in seed_counterparties.columns:
+    required_node_columns = {
+        "node_type",
+        "counterparty_key",
+    }
+    missing_node_columns = sorted(
+        required_node_columns
+        - set(graph_nodes.columns)
+    )
+
+    if missing_node_columns:
         raise SourceContractError(
-            "seed_counterparties is missing "
-            "counterparty_key."
+            "Unified graph nodes are missing "
+            f"columns: {missing_node_columns}"
         )
+
+    counterparty_nodes = graph_nodes.loc[
+        graph_nodes["node_type"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+        .eq("COUNTERPARTY")
+    ]
 
     counterparty_keys = sorted({
         str(value).strip()
-        for value in seed_counterparties[
+        for value in counterparty_nodes[
             "counterparty_key"
         ]
         if not pd.isna(value)
