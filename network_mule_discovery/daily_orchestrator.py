@@ -8,14 +8,24 @@ from pathlib import Path
 import pandas as pd
 
 from network_mule_discovery.bundle_behavioral_sources import (
+    build_bundle_behavioral_sources,
     build_bundle_counterparty_payloads,
+)
+from network_mule_discovery.customer_behavioral_features import (
+    build_customer_behavioral_features,
 )
 from network_mule_discovery.daily_ai_runner import (
     DailyAiSettings,
 )
+from network_mule_discovery.daily_state import (
+    CsvDailyStateStore,
+    build_incremental_daily_plan,
+)
 from network_mule_discovery.frontier_ai import (
     CounterpartyFrontierRunResult,
+    CustomerFrontierRunResult,
     run_counterparty_ai_frontier,
+    run_customer_ai_frontier,
 )
 from network_mule_discovery.bundle_source_adapter import (
     build_canonical_discovery_inputs_from_bundle,
@@ -383,4 +393,175 @@ def run_counterparty_ai_phase(
         counterparty_frontier=(
             counterparty_frontier
         ),
+    )
+
+@dataclass(frozen=True)
+class DailyCustomerAiPhaseResult:
+    """Outputs from the customer-second AI phase."""
+
+    counterparty_phase: DailyCounterpartyAiPhaseResult
+    customer_payloads: pd.DataFrame
+    supplemental_subject_payloads: pd.DataFrame
+    customer_frontier: CustomerFrontierRunResult
+
+
+def run_customer_ai_phase(
+    *,
+    counterparty_phase: DailyCounterpartyAiPhaseResult,
+    state_directory: Path | str,
+    settings: DailyAiSettings,
+    adapter_factory=None,
+) -> DailyCustomerAiPhaseResult:
+    """Execute customer AI after counterparty decisions close."""
+    if not isinstance(
+        counterparty_phase,
+        DailyCounterpartyAiPhaseResult,
+    ):
+        raise SourceContractError(
+            "counterparty_phase must be a "
+            "DailyCounterpartyAiPhaseResult."
+        )
+
+    if not isinstance(
+        settings,
+        DailyAiSettings,
+    ):
+        raise SourceContractError(
+            "settings must be DailyAiSettings."
+        )
+
+    initial_discovery = (
+        counterparty_phase.initial_discovery
+    )
+    source_bundle = (
+        initial_discovery
+        .source_preflight
+        .source_bundle
+    )
+    run_date = source_bundle.metadata.run_date
+    resolved_state_directory = Path(
+        state_directory
+    )
+
+    state_store = CsvDailyStateStore(
+        resolved_state_directory
+    )
+
+    preflight_plan = build_incremental_daily_plan(
+        state_store=state_store,
+        run_date=run_date,
+        supplemental_subject_payloads=(
+            counterparty_phase
+            .counterparty_payloads
+        ),
+    )
+
+    unresolved_counterparties = (
+        preflight_plan.actionable_queue.loc[
+            preflight_plan.actionable_queue[
+                "action_type"
+            ].eq("RUN_COUNTERPARTY_AI")
+        ]
+    )
+
+    if not unresolved_counterparties.empty:
+        subjects = sorted(
+            unresolved_counterparties[
+                "subject_key"
+            ].astype("string")
+        )
+
+        raise RuntimeError(
+            "Customer AI phase cannot start while "
+            "counterparty decisions remain unresolved: "
+            f"{subjects}"
+        )
+
+    customer_keys = sorted({
+        str(value).strip()
+        for value in preflight_plan.actionable_queue.loc[
+            preflight_plan.actionable_queue[
+                "action_type"
+            ].eq("RUN_CUSTOMER_AI"),
+            "subject_key",
+        ]
+        if not pd.isna(value)
+        and str(value).strip()
+    })
+
+    behavioral_sources = (
+        build_bundle_behavioral_sources(
+            source_bundle
+        )
+    )
+
+    if customer_keys:
+        customer_features = (
+            build_customer_behavioral_features(
+                customer_keys=customer_keys,
+                projection=(
+                    preflight_plan.projection
+                ),
+                run_date=run_date,
+                raw_sources=(
+                    behavioral_sources.raw_sources
+                ),
+                international_customer_currency_activity=(
+                    behavioral_sources
+                    .international_customer_currency_activity
+                ),
+            )
+        )
+
+        customer_payloads = (
+            customer_features.customer_payloads
+        )
+    else:
+        customer_payloads = pd.DataFrame(
+            columns=[
+                "subject_type",
+                "subject_key",
+                "feature_payload_json",
+            ]
+        )
+
+    supplemental_subject_payloads = pd.concat(
+        [
+            counterparty_phase
+            .counterparty_payloads,
+            customer_payloads,
+        ],
+        ignore_index=True,
+    )
+
+    run_kwargs = {
+        "unified_result": (
+            initial_discovery.unified_groups
+        ),
+        "supplemental_subject_payloads": (
+            supplemental_subject_payloads
+        ),
+        "state_directory": (
+            resolved_state_directory
+        ),
+        "run_date": run_date,
+        "settings": settings,
+    }
+
+    if adapter_factory is not None:
+        run_kwargs["adapter_factory"] = (
+            adapter_factory
+        )
+
+    customer_frontier = run_customer_ai_frontier(
+        **run_kwargs
+    )
+
+    return DailyCustomerAiPhaseResult(
+        counterparty_phase=counterparty_phase,
+        customer_payloads=customer_payloads,
+        supplemental_subject_payloads=(
+            supplemental_subject_payloads
+        ),
+        customer_frontier=customer_frontier,
     )
