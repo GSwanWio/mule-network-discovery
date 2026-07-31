@@ -4,6 +4,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from network_mule_discovery.bundle_source_adapter import (
+    build_canonical_discovery_inputs_from_bundle,
+)
+from network_mule_discovery.counterparty_discovery import (
+    CounterpartyDiscoveryResult,
+    discover_counterparty_candidates,
+)
+from network_mule_discovery.eid_discovery import (
+    EidDiscoveryResult,
+    discover_entities_by_seed_eids,
+)
+from network_mule_discovery.graph_builder import (
+    GraphBuildResult,
+    build_eid_graph,
+)
+from network_mule_discovery.in_memory_data_source import (
+    InMemoryCounterpartyNetworkDataSource,
+)
+from network_mule_discovery.unified_group_builder import (
+    UnifiedGroupResult,
+    build_unified_seed_groups,
+)
 from network_mule_discovery.source_contracts import (
     SOURCE_DATASET_NAMES,
     DiscoverySourceBundle,
@@ -150,4 +172,86 @@ def run_source_preflight(
             for dataset_name
             in SOURCE_DATASET_NAMES
         ),
+    )
+
+
+@dataclass(frozen=True)
+class DailyInitialDiscoveryResult:
+    """Deterministic outputs produced before AI execution."""
+
+    source_preflight: DailySourcePreflightResult
+    eid_discovery: EidDiscoveryResult
+    eid_graph: GraphBuildResult
+    counterparty_discovery: CounterpartyDiscoveryResult
+    unified_groups: UnifiedGroupResult
+
+
+def run_initial_discovery(
+    *,
+    source_preflight: DailySourcePreflightResult,
+    assess_eid_linked_customers: bool = True,
+) -> DailyInitialDiscoveryResult:
+    """Run deterministic initial discovery from validated sources."""
+    if not isinstance(
+        source_preflight,
+        DailySourcePreflightResult,
+    ):
+        raise SourceContractError(
+            "source_preflight must be a "
+            "DailySourcePreflightResult."
+        )
+
+    canonical_inputs = (
+        build_canonical_discovery_inputs_from_bundle(
+            source_preflight.source_bundle
+        )
+    )
+
+    data_source = (
+        InMemoryCounterpartyNetworkDataSource(
+            canonical_inputs
+        )
+    )
+
+    run_date = (
+        source_preflight
+        .source_bundle
+        .metadata
+        .run_date
+    )
+
+    eid_discovery = discover_entities_by_seed_eids(
+        data_source=data_source,
+        run_date=run_date,
+    )
+
+    eid_graph = build_eid_graph(
+        discovery_result=eid_discovery,
+        run_date=run_date,
+    )
+
+    counterparty_discovery = (
+        discover_counterparty_candidates(
+            data_source=data_source,
+            run_date=run_date,
+        )
+    )
+
+    unified_groups = build_unified_seed_groups(
+        eid_discovery=eid_discovery,
+        counterparty_discovery=counterparty_discovery,
+        run_date=run_date,
+        assess_eid_linked_customers=(
+            assess_eid_linked_customers
+        ),
+    )
+
+    return DailyInitialDiscoveryResult(
+        source_preflight=source_preflight,
+        eid_discovery=eid_discovery,
+        eid_graph=eid_graph,
+        counterparty_discovery=(
+            counterparty_discovery
+        ),
+        unified_groups=unified_groups,
     )

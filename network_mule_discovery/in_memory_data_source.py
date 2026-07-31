@@ -7,12 +7,18 @@ from datetime import date
 
 import pandas as pd
 
+from network_mule_discovery.counterparty_schemas import (
+    prepare_counterparty_events,
+    prepare_seed_mule_events,
+)
 from network_mule_discovery.raw_source_adapter import (
     CanonicalDiscoveryInputs,
 )
 from network_mule_discovery.schemas import (
     normalize_emirates_id,
     parse_run_date,
+    prepare_customer_identity,
+    prepare_seed_mules,
 )
 
 
@@ -31,15 +37,23 @@ class InMemoryCounterpartyNetworkDataSource:
                 "inputs must be CanonicalDiscoveryInputs."
             )
 
-        self._seed_mules = inputs.seed_mules.copy()
+        self._seed_mules = prepare_seed_mules(
+            inputs.seed_mules
+        )
         self._customer_identity = (
-            inputs.customer_identity.copy()
+            prepare_customer_identity(
+                inputs.customer_identity
+            )
         )
         self._seed_mule_events = (
-            inputs.seed_mule_events.copy()
+            prepare_seed_mule_events(
+                inputs.seed_mule_events
+            )
         )
         self._counterparty_events = (
-            inputs.counterparty_events.copy()
+            prepare_counterparty_events(
+                inputs.counterparty_events
+            )
         )
 
         self.saved_groups: pd.DataFrame | None = None
