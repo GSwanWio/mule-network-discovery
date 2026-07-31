@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from typing import Iterable
 
 import pandas as pd
 
 from network_mule_discovery.behavioral_features import (
     BehavioralFeatureError,
+    build_behavioral_features,
+)
+from network_mule_discovery.decision_policy import (
+    COUNTERPARTY_ASSESSMENT_POLICY_VERSION,
 )
 from network_mule_discovery.counterparty_schemas import (
     build_counterparty_identity,
@@ -414,4 +420,195 @@ def build_bundle_behavioral_sources(
                 run_date=run_date,
             )
         ),
+    )
+
+def build_bundle_counterparty_payloads(
+    *,
+    source_bundle: DiscoverySourceBundle,
+    counterparty_keys: Iterable[str],
+) -> pd.DataFrame:
+    """Build local and international counterparty AI payloads."""
+    requested_keys = sorted({
+        str(value).strip()
+        for value in counterparty_keys
+        if value is not None
+        and str(value).strip()
+    })
+
+    if not requested_keys:
+        raise BehavioralFeatureError(
+            "At least one counterparty key is required."
+        )
+
+    sources = build_bundle_behavioral_sources(
+        source_bundle
+    )
+    run_date = parse_run_date(
+        source_bundle.metadata.run_date
+    )
+
+    local_outward = _completed_before_run_date(
+        frame=(
+            sources.raw_sources
+            .local_outward_payments
+        ),
+        run_date=run_date,
+        dataset_name="local_outward_payments",
+    )
+
+    local_available_keys = {
+        build_counterparty_identity(
+            rail="LOCAL",
+            counterparty_iban="",
+            counterparty_swift_bic="",
+            counterparty_account_number=value,
+        ).counterparty_key
+        for value in local_outward[
+            "beneficiary_account_number"
+        ]
+    }
+
+    local_keys = sorted(
+        set(requested_keys)
+        & local_available_keys
+    )
+
+    payload_frames: list[pd.DataFrame] = []
+
+    if local_keys:
+        local_result = build_behavioral_features(
+            counterparty_keys=local_keys,
+            run_date=run_date,
+            raw_sources=sources.raw_sources,
+            international_counterparty_currency_activity=(
+                sources
+                .international_counterparty_currency_activity
+            ),
+        )
+
+        payload_frames.append(
+            local_result.counterparty_payloads
+        )
+
+    remaining_keys = sorted(
+        set(requested_keys) - set(local_keys)
+    )
+
+    international_activity = (
+        sources
+        .international_counterparty_currency_activity
+    )
+
+    international_records = []
+
+    for counterparty_key in remaining_keys:
+        current = international_activity.loc[
+            international_activity[
+                "counterparty_key"
+            ]
+            .astype("string")
+            .str.strip()
+            .eq(counterparty_key)
+        ].sort_values(
+            by=["currency"],
+            kind="stable",
+        )
+
+        if current.empty:
+            raise BehavioralFeatureError(
+                "No completed local or international "
+                "transfer evidence exists for "
+                f"{counterparty_key}."
+            )
+
+        currency_activity = [
+            {
+                "currency": str(row.currency),
+                "event_count": int(
+                    row.event_count
+                ),
+                "total_amount": float(
+                    row.total_amount
+                ),
+                "distinct_customer_count": int(
+                    row.distinct_customer_count
+                ),
+            }
+            for row in current.itertuples(
+                index=False
+            )
+        ]
+
+        payload = {
+            "subject_type": "COUNTERPARTY",
+            "subject_key": counterparty_key,
+            "run_date": str(run_date),
+            "counterparty_assessment_policy_version": (
+                COUNTERPARTY_ASSESSMENT_POLICY_VERSION
+            ),
+            "evidence_scope": (
+                "INTERNATIONAL_CURRENCY_SUMMARY"
+            ),
+            "international_currency_activity": (
+                currency_activity
+            ),
+            "aggregate_behavior": {
+                "currency_group_count": len(
+                    currency_activity
+                ),
+                "transfer_event_count": sum(
+                    record["event_count"]
+                    for record in currency_activity
+                ),
+                "amounts_kept_separate_by_currency": (
+                    True
+                ),
+            },
+        }
+
+        international_records.append({
+            "subject_type": "COUNTERPARTY",
+            "subject_key": counterparty_key,
+            "feature_payload_json": json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        })
+
+    if international_records:
+        payload_frames.append(
+            pd.DataFrame(
+                international_records
+            )
+        )
+
+    result = pd.concat(
+        payload_frames,
+        ignore_index=True,
+    )
+
+    duplicate_mask = result.duplicated(
+        subset=[
+            "subject_type",
+            "subject_key",
+        ],
+        keep=False,
+    )
+
+    if duplicate_mask.any():
+        raise BehavioralFeatureError(
+            "Counterparty payload generation "
+            "produced duplicate subjects."
+        )
+
+    return (
+        result.sort_values(
+            by=[
+                "subject_type",
+                "subject_key",
+            ],
+            kind="stable",
+        )
+        .reset_index(drop=True)
     )
