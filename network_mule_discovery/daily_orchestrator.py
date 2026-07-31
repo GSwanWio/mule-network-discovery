@@ -19,6 +19,7 @@ from network_mule_discovery.daily_ai_runner import (
 )
 from network_mule_discovery.daily_state import (
     CsvDailyStateStore,
+    DailyIncrementalPlan,
     build_incremental_daily_plan,
 )
 from network_mule_discovery.frontier_ai import (
@@ -26,6 +27,18 @@ from network_mule_discovery.frontier_ai import (
     CustomerFrontierRunResult,
     run_counterparty_ai_frontier,
     run_customer_ai_frontier,
+)
+from network_mule_discovery.frontier_termination import (
+    FrontierTerminationResult,
+)
+from network_mule_discovery.recursive_counterparty_frontier import (
+    RecursiveCounterpartyFrontierResult,
+)
+from network_mule_discovery.recursive_customer_frontier import (
+    RecursiveCustomerFrontierResult,
+)
+from network_mule_discovery.recursive_termination import (
+    RecursiveTerminationResult,
 )
 from network_mule_discovery.bundle_source_adapter import (
     build_canonical_discovery_inputs_from_bundle,
@@ -689,3 +702,55 @@ def select_next_frontier_action(
         action_type=action_type,
         subject_keys=subject_keys,
     )
+
+@dataclass(frozen=True)
+class DailyBreadthFirstSettings:
+    """Safety limit for one persisted frontier run."""
+
+    max_frontier_steps: int
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.max_frontier_steps, bool)
+            or not isinstance(
+                self.max_frontier_steps,
+                int,
+            )
+            or self.max_frontier_steps <= 0
+        ):
+            raise SourceContractError(
+                "max_frontier_steps must be a "
+                "positive integer."
+            )
+
+
+@dataclass(frozen=True)
+class DailyBreadthFirstStepResult:
+    """One selected and completed frontier phase."""
+
+    step_number: int
+    selection: DailyFrontierSelection
+    recursive_counterparty: (
+        RecursiveCounterpartyFrontierResult | None
+    ) = None
+    recursive_customer: (
+        RecursiveCustomerFrontierResult | None
+    ) = None
+
+
+@dataclass(frozen=True)
+class DailyBreadthFirstRunResult:
+    """Final state from one bounded breadth-first run."""
+
+    customer_phase: DailyCustomerAiPhaseResult
+    steps: tuple[DailyBreadthFirstStepResult, ...]
+    supplemental_subject_payloads: pd.DataFrame
+    final_plan: DailyIncrementalPlan
+    termination_status: str
+    termination_reason: str
+    recursive_termination: (
+        RecursiveTerminationResult | None
+    ) = None
+    frontier_termination: (
+        FrontierTerminationResult | None
+    ) = None
