@@ -53,7 +53,7 @@ def main() -> None:
         source_directory = root / "source"
         state_directory = root / "state"
 
-        generate_scenario_5_source_data(
+        manifest = generate_scenario_5_source_data(
             source_directory
         )
 
@@ -67,10 +67,7 @@ def main() -> None:
 
         provider = ScenarioOneProvider(
             source_directory=source_directory,
-            source_manifest={
-                "scenario": "scenario_5",
-                "run_date": str(RUN_DATE),
-            },
+            source_manifest=manifest,
         )
 
         preflight = run_source_preflight(
