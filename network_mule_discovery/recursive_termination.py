@@ -15,6 +15,9 @@ from network_mule_discovery.daily_state import (
     DailyIncrementalPlan,
     build_incremental_daily_plan,
 )
+from network_mule_discovery.raw_source_adapter import (
+    RawDiscoverySources,
+)
 from network_mule_discovery.recursive_counterparty_frontier import (
     DISCOVERY_ACTION_TYPE,
     RecursiveCounterpartyDiscoveryResult,
@@ -267,10 +270,11 @@ def _build_termination_status(
 
 def run_recursive_termination(
     *,
-    source_directory: Path | str,
     state_directory: Path | str,
     run_date: date | str,
     supplemental_subject_payloads: pd.DataFrame,
+    source_directory: Path | str | None = None,
+    raw_sources: RawDiscoverySources | None = None,
 ) -> RecursiveTerminationResult:
     """Consume the final expansion source and persist frontier exhaustion."""
     resolved_run_date = parse_run_date(run_date)
@@ -318,6 +322,7 @@ def run_recursive_termination(
         )
         discovery = discover_recursive_counterparties(
             source_directory=source_directory,
+            raw_sources=raw_sources,
             observed_network=snapshot.network,
             source_entity_key=source_entity_key,
             group_ids=source_group_ids,
