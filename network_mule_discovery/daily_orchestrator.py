@@ -565,3 +565,127 @@ def run_customer_ai_phase(
         ),
         customer_frontier=customer_frontier,
     )
+
+@dataclass(frozen=True)
+class DailyFrontierSelection:
+    """The next safe persisted-frontier action."""
+
+    action_type: str
+    subject_keys: tuple[str, ...]
+
+
+def select_next_frontier_action(
+    *,
+    actionable_queue: pd.DataFrame,
+    failed_closed_item_count: int,
+) -> DailyFrontierSelection:
+    """Select exactly one safe breadth-first phase."""
+    if failed_closed_item_count < 0:
+        raise SourceContractError(
+            "failed_closed_item_count cannot be negative."
+        )
+
+    if failed_closed_item_count:
+        return DailyFrontierSelection(
+            action_type="FAIL_CLOSED",
+            subject_keys=tuple(),
+        )
+
+    required_columns = {
+        "action_type",
+        "subject_key",
+    }
+
+    missing_columns = sorted(
+        required_columns - set(actionable_queue.columns)
+    )
+
+    if missing_columns:
+        raise SourceContractError(
+            "actionable_queue is missing columns: "
+            f"{missing_columns}"
+        )
+
+    if actionable_queue.empty:
+        return DailyFrontierSelection(
+            action_type="TERMINATE_FRONTIER",
+            subject_keys=tuple(),
+        )
+
+    prepared = actionable_queue[
+        [
+            "action_type",
+            "subject_key",
+        ]
+    ].copy()
+
+    prepared["action_type"] = (
+        prepared["action_type"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+    prepared["subject_key"] = (
+        prepared["subject_key"]
+        .astype("string")
+        .str.strip()
+    )
+
+    supported_actions = {
+        "RUN_COUNTERPARTY_AI",
+        "RUN_CUSTOMER_AI",
+        "DISCOVER_CUSTOMER_RELATIONSHIPS",
+    }
+
+    observed_actions = set(
+        prepared["action_type"]
+    )
+
+    unsupported_actions = sorted(
+        observed_actions - supported_actions
+    )
+
+    if unsupported_actions:
+        raise SourceContractError(
+            "Unsupported actionable frontier types: "
+            f"{unsupported_actions}"
+        )
+
+    if len(observed_actions) != 1:
+        raise SourceContractError(
+            "The actionable frontier contains mixed "
+            f"breadth-first phases: {sorted(observed_actions)}"
+        )
+
+    action_type = next(iter(observed_actions))
+    subject_keys = tuple(
+        sorted(
+            prepared["subject_key"]
+            .drop_duplicates()
+            .tolist()
+        )
+    )
+
+    if not subject_keys or any(
+        not subject_key
+        for subject_key in subject_keys
+    ):
+        raise SourceContractError(
+            "The actionable frontier contains a blank "
+            "subject key."
+        )
+
+    if (
+        action_type
+        == "DISCOVER_CUSTOMER_RELATIONSHIPS"
+        and len(subject_keys) != 1
+    ):
+        raise SourceContractError(
+            "Recursive discovery requires exactly one "
+            f"approved source; found {len(subject_keys)}."
+        )
+
+    return DailyFrontierSelection(
+        action_type=action_type,
+        subject_keys=subject_keys,
+    )
