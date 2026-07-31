@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
+import pandas as pd
+
+from network_mule_discovery.bundle_behavioral_sources import (
+    build_bundle_counterparty_payloads,
+)
+from network_mule_discovery.daily_ai_runner import (
+    DailyAiSettings,
+)
+from network_mule_discovery.frontier_ai import (
+    CounterpartyFrontierRunResult,
+    run_counterparty_ai_frontier,
+)
 from network_mule_discovery.bundle_source_adapter import (
     build_canonical_discovery_inputs_from_bundle,
 )
@@ -254,4 +267,120 @@ def run_initial_discovery(
             counterparty_discovery
         ),
         unified_groups=unified_groups,
+    )
+
+@dataclass(frozen=True)
+class DailyCounterpartyAiPhaseResult:
+    """Outputs from the counterparty-first AI phase."""
+
+    initial_discovery: DailyInitialDiscoveryResult
+    counterparty_payloads: pd.DataFrame
+    counterparty_frontier: CounterpartyFrontierRunResult
+
+
+def run_counterparty_ai_phase(
+    *,
+    initial_discovery: DailyInitialDiscoveryResult,
+    state_directory: Path | str,
+    settings: DailyAiSettings,
+    reset_state: bool = False,
+    adapter_factory=None,
+) -> DailyCounterpartyAiPhaseResult:
+    """Build evidence and execute the counterparty AI frontier."""
+    if not isinstance(
+        initial_discovery,
+        DailyInitialDiscoveryResult,
+    ):
+        raise SourceContractError(
+            "initial_discovery must be a "
+            "DailyInitialDiscoveryResult."
+        )
+
+    if not isinstance(
+        settings,
+        DailyAiSettings,
+    ):
+        raise SourceContractError(
+            "settings must be DailyAiSettings."
+        )
+
+    seed_counterparties = (
+        initial_discovery
+        .counterparty_discovery
+        .seed_counterparties
+    )
+
+    if "counterparty_key" not in seed_counterparties.columns:
+        raise SourceContractError(
+            "seed_counterparties is missing "
+            "counterparty_key."
+        )
+
+    counterparty_keys = sorted({
+        str(value).strip()
+        for value in seed_counterparties[
+            "counterparty_key"
+        ]
+        if not pd.isna(value)
+        and str(value).strip()
+    })
+
+    if counterparty_keys:
+        counterparty_payloads = (
+            build_bundle_counterparty_payloads(
+                source_bundle=(
+                    initial_discovery
+                    .source_preflight
+                    .source_bundle
+                ),
+                counterparty_keys=counterparty_keys,
+            )
+        )
+    else:
+        counterparty_payloads = pd.DataFrame(
+            columns=[
+                "subject_type",
+                "subject_key",
+                "feature_payload_json",
+            ]
+        )
+
+    run_kwargs = {
+        "unified_result": (
+            initial_discovery.unified_groups
+        ),
+        "supplemental_subject_payloads": (
+            counterparty_payloads
+        ),
+        "state_directory": state_directory,
+        "run_date": (
+            initial_discovery
+            .source_preflight
+            .source_bundle
+            .metadata
+            .run_date
+        ),
+        "settings": settings,
+        "reset_state": reset_state,
+    }
+
+    if adapter_factory is not None:
+        run_kwargs["adapter_factory"] = (
+            adapter_factory
+        )
+
+    counterparty_frontier = (
+        run_counterparty_ai_frontier(
+            **run_kwargs
+        )
+    )
+
+    return DailyCounterpartyAiPhaseResult(
+        initial_discovery=initial_discovery,
+        counterparty_payloads=(
+            counterparty_payloads
+        ),
+        counterparty_frontier=(
+            counterparty_frontier
+        ),
     )
