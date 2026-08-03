@@ -31,3 +31,4 @@ data/synthetic/*/runtime/
 # Generated analyst review state
 data/analyst_review_source/
 data/analyst_review_state/
+data/analyst_visual_review/

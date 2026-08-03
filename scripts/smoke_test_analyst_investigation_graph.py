@@ -7,6 +7,9 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from streamlit_cytoscape.sanitize import (
+    sanitize_elements,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,6 +149,28 @@ def main() -> None:
     assert len(graph.elements["nodes"]) == 4
     assert len(graph.elements["edges"]) == 3
 
+    assert all(
+        node["selectable"] is False
+        for node in graph.elements["nodes"]
+    )
+    assert all(
+        node["grabbable"] is False
+        for node in graph.elements["nodes"]
+    )
+
+    sanitized = sanitize_elements(
+        graph.elements
+    )
+
+    assert all(
+        node["selectable"] is False
+        for node in sanitized["nodes"]
+    )
+    assert all(
+        node["grabbable"] is False
+        for node in sanitized["nodes"]
+    )
+
     node_by_id = {
         item["data"]["id"]: item["data"]
         for item in graph.elements["nodes"]
@@ -243,6 +268,8 @@ def main() -> None:
     print("Visible journey nodes: 4")
     print("Visible journey edges: 3")
     print("Node click event: passed")
+    print("Built-in selection disabled: passed")
+    print("Technical inspector opened: no")
     print("Collapsed branch display: passed")
     print("Full audit graph exposed: no")
     print("External live API calls made: 0")

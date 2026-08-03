@@ -282,7 +282,21 @@ def main() -> None:
             graph_arguments["layout"]["name"]
             == "breadthfirst"
         )
-        assert graph_arguments["height"] == 680
+        assert graph_arguments["height"] == 760
+        assert all(
+            node["selectable"] is False
+            for node
+            in graph_arguments[
+                "elements"
+            ]["nodes"]
+        )
+        assert all(
+            node["grabbable"] is False
+            for node
+            in graph_arguments[
+                "elements"
+            ]["nodes"]
+        )
         assert graph_arguments["node_actions"] == []
         assert graph_arguments["edge_actions"] == []
         assert len(graph_arguments["events"]) == 1

@@ -232,6 +232,8 @@ def build_analyst_investigation_graph(
 
         graph_nodes.append(
             {
+                "selectable": False,
+                "grabbable": False,
                 "data": {
                     "id": node_id,
                     "label": _style_label(
@@ -349,8 +351,8 @@ def build_analyst_investigation_graph(
             "directed": True,
             "fit": True,
             "animate": False,
-            "padding": 35,
-            "spacingFactor": 1.45,
+            "padding": 45,
+            "spacingFactor": 1.60,
             "avoidOverlap": True,
             "nodeDimensionsIncludeLabels": True,
         },
@@ -361,13 +363,13 @@ def build_analyst_investigation_graph(
 def analyst_node_styles() -> list[NodeStyle]:
     """Return the semantic analyst node styles."""
     common = {
-        "width": 185,
-        "height": 76,
+        "width": 220,
+        "height": 88,
         "text-wrap": "wrap",
-        "text-max-width": 165,
+        "text-max-width": 195,
         "text-valign": "center",
         "text-halign": "center",
-        "font-size": 11,
+        "font-size": 13,
         "font-weight": 600,
         "color": "#FFFFFF",
         "border-width": 3,

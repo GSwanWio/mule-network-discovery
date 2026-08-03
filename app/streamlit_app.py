@@ -863,7 +863,7 @@ def main() -> None:
 
     st.markdown("")
     graph_column, decision_column = st.columns(
-        [1.85, 1],
+        [2.15, 1],
         gap="large",
     )
 
@@ -886,7 +886,7 @@ def main() -> None:
             layout=graph.layout,
             node_styles=analyst_node_styles(),
             edge_styles=analyst_edge_styles(),
-            height=680,
+            height=760,
             key=(
                 f"investigation-graph::"
                 f"{run_id}::{group_id}"
