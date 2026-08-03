@@ -32,6 +32,9 @@ from network_mule_discovery.live_acceptance_matrix import (
 from network_mule_discovery.source_contracts import (
     SourceLoadRequest,
 )
+from network_mule_discovery.run_state_manifest import (
+    build_run_id,
+)
 from network_mule_discovery.synthetic_scenario_registry import (
     create_synthetic_source_provider,
 )
@@ -57,8 +60,32 @@ class LiveAcceptanceRunResult:
     calls_before_run: int
     calls_after_run: int
     calls_executed: int
-    breadth_first_result: DailyBreadthFirstRunResult
+    breadth_first_result: (
+        DailyBreadthFirstRunResult | None
+    )
     snapshot: ConsolidatedStateSnapshot
+    reused_existing_run: bool
+
+
+def _load_reusable_terminated_snapshot(
+    *,
+    state_store: ConsolidatedStateStore,
+    expected_run_id: str,
+) -> ConsolidatedStateSnapshot | None:
+    """Load an identical finalized run without mutation."""
+    try:
+        manifest = state_store.manifest.load(
+            run_id=expected_run_id
+        )
+    except FileNotFoundError:
+        return None
+
+    if manifest.run_status != "TERMINATED":
+        return None
+
+    return state_store.load(
+        run_id=expected_run_id
+    )
 
 
 def validate_live_acceptance_snapshot(
@@ -323,10 +350,59 @@ def run_live_acceptance_case(
         source_provider=provider,
         source_request=request,
     )
+
+    if provider.load_count != 1:
+        raise LiveAcceptanceRunError(
+            "Source provider was loaded more than once: "
+            f"{provider.load_count}"
+        )
+
+    state_store = ConsolidatedStateStore(
+        state_directory
+    )
+    expected_run_id = build_run_id(
+        preflight.source_bundle.metadata
+    )
+
+    if not reset_state:
+        reusable_snapshot = (
+            _load_reusable_terminated_snapshot(
+                state_store=state_store,
+                expected_run_id=expected_run_id,
+            )
+        )
+
+        if reusable_snapshot is not None:
+            calls_before_run = len(
+                reusable_snapshot.ai_call_ledger
+            )
+
+            validate_live_acceptance_snapshot(
+                case=case,
+                snapshot=reusable_snapshot,
+                calls_executed=0,
+            )
+
+            return LiveAcceptanceRunResult(
+                case=case,
+                source_directory=source_directory,
+                state_directory=state_directory,
+                run_id=expected_run_id,
+                run_date=run_date,
+                provider_load_count=(
+                    provider.load_count
+                ),
+                calls_before_run=calls_before_run,
+                calls_after_run=calls_before_run,
+                calls_executed=0,
+                breadth_first_result=None,
+                snapshot=reusable_snapshot,
+                reused_existing_run=True,
+            )
+
     initial_discovery = run_initial_discovery(
         source_preflight=preflight,
     )
-
     settings = DailyAiSettings(
         live_ai_enabled=execute_live_ai,
         daily_call_limit=daily_call_limit,
@@ -334,10 +410,6 @@ def run_live_acceptance_case(
             case.max_live_calls,
             1,
         ),
-    )
-
-    state_store = ConsolidatedStateStore(
-        state_directory
     )
     calls_before_run = (
         state_store.ai_calls.count_calls(
@@ -403,12 +475,6 @@ def run_live_acceptance_case(
         run_id=run_id
     )
 
-    if provider.load_count != 1:
-        raise LiveAcceptanceRunError(
-            "Source provider was loaded more than once: "
-            f"{provider.load_count}"
-        )
-
     if (
         historical_snapshot.manifest
         != current_snapshot.manifest
@@ -438,4 +504,5 @@ def run_live_acceptance_case(
             breadth_first_result
         ),
         snapshot=historical_snapshot,
+        reused_existing_run=False,
     )
