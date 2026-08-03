@@ -35,6 +35,7 @@ class LiveAcceptanceCase:
     scenario_id: str
     title: str
     max_live_calls: int
+    assess_eid_linked_customers: bool
     required_decisions: tuple[str, ...]
     required_any_decision_groups: tuple[
         tuple[str, ...],
@@ -59,6 +60,7 @@ LIVE_ACCEPTANCE_CASES = (
         scenario_id="scenario_1",
         title="Breadth-and-depth suspicious expansion",
         max_live_calls=11,
+        assess_eid_linked_customers=True,
         required_decisions=(
             "SUSPICIOUS_EXPAND",
             "MULE_LIKE",
@@ -86,6 +88,7 @@ LIVE_ACCEPTANCE_CASES = (
         scenario_id="scenario_2",
         title="Common public high-degree suppression",
         max_live_calls=1,
+        assess_eid_linked_customers=True,
         required_decisions=(),
         required_any_decision_groups=(
             (
@@ -110,6 +113,7 @@ LIVE_ACCEPTANCE_CASES = (
         scenario_id="scenario_3",
         title="Beneficiary-linked customer assessment",
         max_live_calls=2,
+        assess_eid_linked_customers=True,
         required_decisions=(
             "MULE_LIKE",
         ),
@@ -137,6 +141,7 @@ LIVE_ACCEPTANCE_CASES = (
         scenario_id="scenario_4",
         title="Deterministic Emirates-ID-only groups",
         max_live_calls=0,
+        assess_eid_linked_customers=False,
         required_decisions=(),
         required_any_decision_groups=(),
         expected_decision_count=0,
@@ -156,6 +161,7 @@ LIVE_ACCEPTANCE_CASES = (
         scenario_id="scenario_5",
         title="Insufficient counterparty evidence suppression",
         max_live_calls=1,
+        assess_eid_linked_customers=True,
         required_decisions=(
             "INSUFFICIENT_EVIDENCE_SUPPRESS",
         ),

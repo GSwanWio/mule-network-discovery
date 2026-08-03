@@ -402,6 +402,9 @@ def run_live_acceptance_case(
 
     initial_discovery = run_initial_discovery(
         source_preflight=preflight,
+        assess_eid_linked_customers=(
+            case.assess_eid_linked_customers
+        ),
     )
     settings = DailyAiSettings(
         live_ai_enabled=execute_live_ai,

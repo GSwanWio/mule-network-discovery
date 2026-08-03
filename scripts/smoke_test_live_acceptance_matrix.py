@@ -57,6 +57,22 @@ def main() -> None:
         "scenario_5": 1,
     }
     assert MAXIMUM_INITIAL_LIVE_CALLS == 15
+
+    eid_assessment_flags = {
+        case.scenario_id: (
+            case.assess_eid_linked_customers
+        )
+        for case in LIVE_ACCEPTANCE_CASES
+    }
+
+    assert eid_assessment_flags == {
+        "scenario_1": True,
+        "scenario_2": True,
+        "scenario_3": True,
+        "scenario_4": False,
+        "scenario_5": True,
+    }
+
     assert CONTINUE_DECISIONS == {
         "SUSPICIOUS_EXPAND",
         "MULE_LIKE",
