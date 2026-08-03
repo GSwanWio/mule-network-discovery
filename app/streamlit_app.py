@@ -26,6 +26,9 @@ from network_mule_discovery.analyst_group_evidence import (
 from network_mule_discovery.analyst_group_network import (
     AnalystGroupNetworkStore,
 )
+from network_mule_discovery.analyst_network_projection import (
+    build_analyst_network_display_projection,
+)
 from network_mule_discovery.consolidated_state import (
     ConsolidatedStateError,
 )
@@ -141,6 +144,30 @@ def _build_node_statement(row: object) -> str:
             "External counterparty",
             _humanize(node_status),
         ]
+
+        collapsed_customer_count = int(
+            pd.to_numeric(
+                pd.Series(
+                    [
+                        getattr(
+                            row,
+                            "collapsed_customer_count",
+                            0,
+                        )
+                    ]
+                ),
+                errors="coerce",
+            )
+            .fillna(0)
+            .iloc[0]
+        )
+
+        if collapsed_customer_count > 0:
+            label_lines.append(
+                f"{collapsed_customer_count} linked "
+                "customers collapsed"
+            )
+
         shape = "ellipse"
         style = "dashed"
         penwidth = "1"
@@ -552,6 +579,12 @@ def main() -> None:
             run_id=selected_run_id,
             group_id=selected_group_id,
         )
+        display_projection = (
+            build_analyst_network_display_projection(
+                nodes=network.nodes,
+                edges=network.edges,
+            )
+        )
 
     except (
         AnalystApplicationStateError,
@@ -602,27 +635,72 @@ def main() -> None:
             "counterparty. Dotted: suppressed. "
             "Dashed: pending."
         )
+
+        if display_projection.hidden_node_count > 0:
+            st.info(
+                f"{display_projection.hidden_node_count} "
+                "non-actionable customer nodes are "
+                "collapsed because they connect only "
+                "through suppressed common/public "
+                "counterparties. Raw relationships remain "
+                "available in Relationship evidence."
+            )
+
+            st.dataframe(
+                _display_frame(
+                    display_projection
+                    .collapsed_counterparties,
+                    (
+                        "display_label",
+                        "node_status",
+                        "observed_linked_customer_count",
+                        "collapsed_customer_count",
+                        "visible_linked_customer_count",
+                    ),
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
+        show_full_graph = st.checkbox(
+            "Show full audit graph",
+            value=False,
+            help=(
+                "Displays every persisted node and edge, "
+                "including customers suppressed from the "
+                "default analyst view."
+            ),
+        )
+
+        if show_full_graph:
+            graph_nodes = network.nodes
+            graph_edges = network.edges
+        else:
+            graph_nodes = display_projection.nodes
+            graph_edges = display_projection.edges
+
         st.graphviz_chart(
             build_group_graphviz_dot(
-                nodes=network.nodes,
-                edges=network.edges,
+                nodes=graph_nodes,
+                edges=graph_edges,
             ),
             width="stretch",
         )
 
         with st.expander(
-            "Network nodes",
+            "Displayed network nodes",
             expanded=False,
         ):
             st.dataframe(
                 _display_frame(
-                    network.nodes,
+                    graph_nodes,
                     (
                         "node_id",
                         "node_type",
                         "display_label",
                         "entity_key",
                         "counterparty_key",
+                        "collapsed_customer_count",
                         "node_roles",
                         "node_status",
                         "customer_assessment_status",

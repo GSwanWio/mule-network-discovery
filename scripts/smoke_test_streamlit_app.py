@@ -98,6 +98,8 @@ def main() -> None:
         assert len(app.metric) == 18
         assert len(app.dataframe) >= 4
         assert len(app.warning) == 1
+        assert len(app.checkbox) == 1
+        assert app.checkbox[0].value is False
 
         warning_text = app.warning[0].value
 
@@ -113,6 +115,18 @@ def main() -> None:
         assert "data/demo/output" not in app_source
         assert (
             "MULE_NETWORK_STATE_DIRECTORY"
+            in app_source
+        )
+        assert (
+            "build_analyst_network_display_projection"
+            in app_source
+        )
+        assert (
+            "Show full audit graph"
+            in app_source
+        )
+        assert (
+            "customers collapsed"
             in app_source
         )
         assert (
@@ -135,6 +149,8 @@ def main() -> None:
             f"{len(app.dataframe)}"
         )
         print("Demo-output dependency removed: passed")
+        print("Collapsed projection integrated: passed")
+        print("Full audit graph default: hidden")
         print("External live API calls made: 0")
 
 
