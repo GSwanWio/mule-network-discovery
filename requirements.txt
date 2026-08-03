@@ -3,3 +3,4 @@ pandas==3.0.3
 streamlit==1.59.2
 openai==2.46.0
 pydantic==2.13.4
+streamlit-cytoscape==0.2.1
