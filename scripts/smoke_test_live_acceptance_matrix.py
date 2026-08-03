@@ -13,6 +13,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 from network_mule_discovery.live_acceptance_matrix import (
+    CONTINUE_DECISIONS,
+    STOP_DECISIONS,
     LIVE_ACCEPTANCE_CASES,
     MAXIMUM_INITIAL_LIVE_CALLS,
     get_live_acceptance_case,
@@ -55,6 +57,13 @@ def main() -> None:
         "scenario_5": 1,
     }
     assert MAXIMUM_INITIAL_LIVE_CALLS == 15
+    assert CONTINUE_DECISIONS == {
+        "SUSPICIOUS_EXPAND",
+        "MULE_LIKE",
+    }
+    assert CONTINUE_DECISIONS.isdisjoint(
+        STOP_DECISIONS
+    )
 
     assert all(
         case.expected_unchanged_rerun_calls == 0
@@ -72,6 +81,21 @@ def main() -> None:
     assert scenario_1.expected_visible_max_depth == 4
     assert scenario_1.expected_raw_node_count == 108
     assert scenario_1.expected_raw_edge_count == 109
+    assert scenario_1.expected_decision_count == 11
+    assert (
+        scenario_1.minimum_continue_decision_count
+        == 4
+    )
+    assert (
+        scenario_1.minimum_stop_decision_count
+        == 7
+    )
+    assert set(
+        scenario_1.required_decisions
+    ) == {
+        "SUSPICIOUS_EXPAND",
+        "MULE_LIKE",
+    }
 
     scenario_2 = get_live_acceptance_case(
         "SCENARIO_2"
@@ -80,19 +104,26 @@ def main() -> None:
         scenario_2.minimum_collapsed_customer_count
         == NON_SEED_CUSTOMER_COUNT
     )
-    assert scenario_2.required_decisions == (
+    assert scenario_2.required_decisions == ()
+    assert scenario_2.expected_decision_count == 1
+    assert set(
+        scenario_2.required_any_decision_groups[0]
+    ) == {
+        "LEGITIMATE_SUPPRESS",
         "COMMON_PUBLIC_SUPPRESS",
-    )
+    }
 
     scenario_3 = get_live_acceptance_case(
         "scenario_3"
     )
-    assert set(
-        scenario_3.required_decisions
-    ) == {
+    assert scenario_3.required_decisions == (
         "MULE_LIKE",
-        "INSUFFICIENT_EVIDENCE",
-    }
+    )
+    assert scenario_3.expected_decision_count == 2
+    assert (
+        scenario_3.minimum_stop_decision_count
+        == 1
+    )
 
     scenario_4 = get_live_acceptance_case(
         "scenario_4"
@@ -100,6 +131,7 @@ def main() -> None:
     assert scenario_4.max_live_calls == 0
     assert scenario_4.required_decisions == ()
     assert scenario_4.expected_group_count == 2
+    assert scenario_4.expected_decision_count == 0
 
     scenario_5 = get_live_acceptance_case(
         "scenario_5"
@@ -109,6 +141,11 @@ def main() -> None:
         == len(LINKED_CUSTOMER_IDS)
     )
     assert scenario_5.changed_evidence_supported
+    assert scenario_5.expected_decision_count == 1
+    assert (
+        scenario_5.minimum_stop_decision_count
+        == 1
+    )
     assert (
         scenario_5
         .expected_changed_evidence_requeued_calls

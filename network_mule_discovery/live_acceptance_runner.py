@@ -24,6 +24,8 @@ from network_mule_discovery.daily_orchestrator import (
     run_source_preflight,
 )
 from network_mule_discovery.live_acceptance_matrix import (
+    CONTINUE_DECISIONS,
+    STOP_DECISIONS,
     LiveAcceptanceCase,
     get_live_acceptance_case,
 )
@@ -59,7 +61,7 @@ class LiveAcceptanceRunResult:
     snapshot: ConsolidatedStateSnapshot
 
 
-def _validate_final_state(
+def validate_live_acceptance_snapshot(
     *,
     case: LiveAcceptanceCase,
     snapshot: ConsolidatedStateSnapshot,
@@ -108,13 +110,16 @@ def _validate_final_state(
             f"expected={expected_counts}"
         )
 
-    observed_decisions = {
+    observed_decision_values = tuple(
         str(value).strip().upper()
         for value in daily_state.decision_store[
             "decision"
         ]
         if str(value).strip()
-    }
+    )
+    observed_decisions = set(
+        observed_decision_values
+    )
 
     missing_decisions = sorted(
         set(case.required_decisions)
@@ -125,6 +130,75 @@ def _validate_final_state(
         raise LiveAcceptanceRunError(
             "Required AI decisions are missing: "
             f"{missing_decisions}"
+        )
+
+    missing_decision_groups = [
+        accepted_group
+        for accepted_group
+        in case.required_any_decision_groups
+        if not observed_decisions.intersection(
+            accepted_group
+        )
+    ]
+
+    if missing_decision_groups:
+        raise LiveAcceptanceRunError(
+            "No accepted decision was produced for "
+            "required outcome groups: "
+            f"{missing_decision_groups}"
+        )
+
+    known_decisions = (
+        CONTINUE_DECISIONS
+        | STOP_DECISIONS
+    )
+    unknown_decisions = sorted(
+        observed_decisions - known_decisions
+    )
+
+    if unknown_decisions:
+        raise LiveAcceptanceRunError(
+            "Unknown persisted AI decisions: "
+            f"{unknown_decisions}"
+        )
+
+    if (
+        len(observed_decision_values)
+        != case.expected_decision_count
+    ):
+        raise LiveAcceptanceRunError(
+            "Unexpected persisted decision count: "
+            f"{len(observed_decision_values)} != "
+            f"{case.expected_decision_count}"
+        )
+
+    continue_count = sum(
+        decision in CONTINUE_DECISIONS
+        for decision in observed_decision_values
+    )
+    stop_count = sum(
+        decision in STOP_DECISIONS
+        for decision in observed_decision_values
+    )
+
+    if (
+        continue_count
+        < case.minimum_continue_decision_count
+    ):
+        raise LiveAcceptanceRunError(
+            "Too few AI expansion decisions: "
+            f"{continue_count} < "
+            f"{case.minimum_continue_decision_count}"
+        )
+
+    if (
+        stop_count
+        < case.minimum_stop_decision_count
+    ):
+        raise LiveAcceptanceRunError(
+            "Too few AI stopping decisions: "
+            f"{stop_count} < "
+            f"{case.minimum_stop_decision_count}"
         )
 
     if calls_executed > case.max_live_calls:
@@ -344,7 +418,7 @@ def run_live_acceptance_case(
             "the finalized current manifest."
         )
 
-    _validate_final_state(
+    validate_live_acceptance_snapshot(
         case=case,
         snapshot=historical_snapshot,
         calls_executed=calls_executed,

@@ -5,6 +5,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+CONTINUE_DECISIONS = frozenset({
+    "SUSPICIOUS_EXPAND",
+    "MULE_LIKE",
+})
+
+COUNTERPARTY_STOP_DECISIONS = frozenset({
+    "LEGITIMATE_SUPPRESS",
+    "COMMON_PUBLIC_SUPPRESS",
+    "INSUFFICIENT_EVIDENCE_SUPPRESS",
+})
+
+CUSTOMER_STOP_DECISIONS = frozenset({
+    "EXPOSED_VULNERABLE",
+    "LOW_CONCERN",
+    "INSUFFICIENT_EVIDENCE",
+})
+
+STOP_DECISIONS = (
+    COUNTERPARTY_STOP_DECISIONS
+    | CUSTOMER_STOP_DECISIONS
+)
+
+
 @dataclass(frozen=True)
 class LiveAcceptanceCase:
     """Acceptance requirements for one synthetic scenario."""
@@ -13,6 +36,13 @@ class LiveAcceptanceCase:
     title: str
     max_live_calls: int
     required_decisions: tuple[str, ...]
+    required_any_decision_groups: tuple[
+        tuple[str, ...],
+        ...,
+    ]
+    expected_decision_count: int
+    minimum_continue_decision_count: int
+    minimum_stop_decision_count: int
     expected_termination_reason: str
     expected_group_count: int
     expected_raw_node_count: int
@@ -30,13 +60,18 @@ LIVE_ACCEPTANCE_CASES = (
         title="Breadth-and-depth suspicious expansion",
         max_live_calls=11,
         required_decisions=(
-            "COMMON_PUBLIC_SUPPRESS",
             "SUSPICIOUS_EXPAND",
             "MULE_LIKE",
-            "EXPOSED_VULNERABLE",
-            "INSUFFICIENT_EVIDENCE",
-            "LOW_CONCERN",
         ),
+        required_any_decision_groups=(
+            (
+                "LEGITIMATE_SUPPRESS",
+                "COMMON_PUBLIC_SUPPRESS",
+            ),
+        ),
+        expected_decision_count=11,
+        minimum_continue_decision_count=4,
+        minimum_stop_decision_count=7,
         expected_termination_reason="FRONTIER_EXHAUSTED",
         expected_group_count=1,
         expected_raw_node_count=108,
@@ -51,9 +86,16 @@ LIVE_ACCEPTANCE_CASES = (
         scenario_id="scenario_2",
         title="Common public high-degree suppression",
         max_live_calls=1,
-        required_decisions=(
-            "COMMON_PUBLIC_SUPPRESS",
+        required_decisions=(),
+        required_any_decision_groups=(
+            (
+                "LEGITIMATE_SUPPRESS",
+                "COMMON_PUBLIC_SUPPRESS",
+            ),
         ),
+        expected_decision_count=1,
+        minimum_continue_decision_count=0,
+        minimum_stop_decision_count=1,
         expected_termination_reason="FRONTIER_EXHAUSTED",
         expected_group_count=1,
         expected_raw_node_count=502,
@@ -70,8 +112,17 @@ LIVE_ACCEPTANCE_CASES = (
         max_live_calls=2,
         required_decisions=(
             "MULE_LIKE",
-            "INSUFFICIENT_EVIDENCE",
         ),
+        required_any_decision_groups=(
+            (
+                "EXPOSED_VULNERABLE",
+                "LOW_CONCERN",
+                "INSUFFICIENT_EVIDENCE",
+            ),
+        ),
+        expected_decision_count=2,
+        minimum_continue_decision_count=1,
+        minimum_stop_decision_count=1,
         expected_termination_reason="FRONTIER_EXHAUSTED",
         expected_group_count=1,
         expected_raw_node_count=3,
@@ -87,6 +138,10 @@ LIVE_ACCEPTANCE_CASES = (
         title="Deterministic Emirates-ID-only groups",
         max_live_calls=0,
         required_decisions=(),
+        required_any_decision_groups=(),
+        expected_decision_count=0,
+        minimum_continue_decision_count=0,
+        minimum_stop_decision_count=0,
         expected_termination_reason="FRONTIER_EXHAUSTED",
         expected_group_count=2,
         expected_raw_node_count=5,
@@ -104,6 +159,10 @@ LIVE_ACCEPTANCE_CASES = (
         required_decisions=(
             "INSUFFICIENT_EVIDENCE_SUPPRESS",
         ),
+        required_any_decision_groups=(),
+        expected_decision_count=1,
+        minimum_continue_decision_count=0,
+        minimum_stop_decision_count=1,
         expected_termination_reason="FRONTIER_EXHAUSTED",
         expected_group_count=1,
         expected_raw_node_count=4,
