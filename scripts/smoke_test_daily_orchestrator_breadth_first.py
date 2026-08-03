@@ -28,6 +28,9 @@ from smoke_test_scenario_1_recursive_counterparty_frontier import (
 from smoke_test_scenario_1_recursive_customer_frontier import (
     RecursiveCustomerAdapter,
 )
+from network_mule_discovery.consolidated_state import (
+    ConsolidatedStateStore,
+)
 from network_mule_discovery.daily_ai_runner import (
     DailyAiSettings,
 )
@@ -98,6 +101,19 @@ def main() -> None:
             ),
             reset_state=True,
             adapter_factory=forbidden_factory,
+        )
+
+        running_manifest = (
+            ConsolidatedStateStore(
+                state_directory
+            )
+            .manifest
+            .load()
+        )
+        assert running_manifest.run_status == "RUNNING"
+        assert (
+            running_manifest.source_snapshot_hash
+            == preflight.source_snapshot_hash
         )
 
         state_store = CsvDailyStateStore(
@@ -185,11 +201,87 @@ def main() -> None:
             result.supplemental_subject_payloads
         ) == 11
 
+        final_manifest_store = (
+            ConsolidatedStateStore(
+                state_directory
+            )
+            .manifest
+        )
+        final_manifest = (
+            final_manifest_store.load()
+        )
+        assert (
+            final_manifest.run_status
+            == "TERMINATED"
+        )
+        assert (
+            final_manifest.termination_status
+            == "TERMINATED"
+        )
+        assert (
+            final_manifest.termination_reason
+            == "FRONTIER_EXHAUSTED"
+        )
+        assert (
+            final_manifest_store.load(
+                run_id=final_manifest.run_id
+            )
+            == final_manifest
+        )
+
+        historical_snapshot = (
+            ConsolidatedStateStore(
+                state_directory
+            )
+            .load(
+                run_id=final_manifest.run_id
+            )
+        )
+
+        assert (
+            historical_snapshot.manifest
+            == final_manifest
+        )
+        assert (
+            historical_snapshot
+            .artifact_directory
+            .name
+            == final_manifest.run_id
+        )
+        assert not (
+            historical_snapshot
+            .daily_state
+            .network
+            .groups
+            .empty
+        )
+        assert not (
+            historical_snapshot
+            .daily_state
+            .network
+            .nodes
+            .empty
+        )
+        assert (
+            historical_snapshot
+            .daily_state
+            .frontier_queue
+            .empty
+        )
+        assert historical_snapshot.artifact_presence[
+            "network_state_groups.csv"
+        ]
+        assert historical_snapshot.artifact_presence[
+            "frontier_queue.csv"
+        ]
+
         print(
             "Daily orchestrator breadth-first "
             "smoke test passed."
         )
         print("Provider load count: 1")
+        print("Run manifest initialized: passed")
+        print("Run manifest finalized: TERMINATED")
         print("Initial customer AI calls: 5")
         print("Recursive counterparty AI calls: 1")
         print("Recursive customer AI calls: 3")
