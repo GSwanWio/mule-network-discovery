@@ -30,6 +30,31 @@ ANALYST_RUN_TABLE_COLUMNS = (
     "missing_artifact_count",
 )
 
+ANALYST_GROUP_REQUIRED_COLUMNS = (
+    "group_id",
+    "group_anchor_seed_entity_key",
+    "group_status",
+    "customer_count",
+    "counterparty_count",
+    "eid_link_count",
+    "shared_counterparty_customer_count",
+    "beneficiary_seed_link_count",
+    "customer_assessment_pending_count",
+    "counterparty_ai_pending_count",
+    "total_node_count",
+    "total_edge_count",
+)
+
+ANALYST_GROUP_TABLE_COLUMNS = (
+    "run_id",
+    *ANALYST_GROUP_REQUIRED_COLUMNS,
+    "approved_suspicious_counterparty_count",
+    "suppressed_counterparty_count",
+    "mule_like_customer_count",
+    "ready_action_count",
+    "failed_closed_action_count",
+)
+
 
 class AnalystApplicationStateError(RuntimeError):
     """Persisted analyst application state is invalid."""
@@ -53,6 +78,86 @@ class AnalystRunSummary:
 
     def to_record(self) -> dict[str, object]:
         """Return one tabular run record."""
+        return asdict(self)
+
+
+def _integer_value(
+    row: pd.Series,
+    column: str,
+    *,
+    default: int = 0,
+) -> int:
+    """Return one validated integer field."""
+    if column not in row.index:
+        return default
+
+    value = row[column]
+
+    if (
+        pd.isna(value)
+        or not str(value).strip()
+    ):
+        return default
+
+    numeric = pd.to_numeric(
+        pd.Series([value]),
+        errors="coerce",
+    ).iloc[0]
+
+    if (
+        pd.isna(numeric)
+        or not float(numeric).is_integer()
+    ):
+        raise AnalystApplicationStateError(
+            "Group field must contain an integer: "
+            f"{column}={value}"
+        )
+
+    return int(numeric)
+
+
+def _parse_group_ids(
+    value: object,
+) -> tuple[str, ...]:
+    """Return normalized group IDs from one queue record."""
+    if value is None or pd.isna(value):
+        return ()
+
+    return tuple(
+        group_id
+        for group_id in (
+            part.strip()
+            for part in str(value).split("|")
+        )
+        if group_id
+    )
+
+
+@dataclass(frozen=True)
+class AnalystGroupSummary:
+    """One analyst-visible persisted network group."""
+
+    run_id: str
+    group_id: str
+    group_anchor_seed_entity_key: str
+    group_status: str
+    customer_count: int
+    counterparty_count: int
+    eid_link_count: int
+    shared_counterparty_customer_count: int
+    beneficiary_seed_link_count: int
+    customer_assessment_pending_count: int
+    counterparty_ai_pending_count: int
+    total_node_count: int
+    total_edge_count: int
+    approved_suspicious_counterparty_count: int
+    suppressed_counterparty_count: int
+    mule_like_customer_count: int
+    ready_action_count: int
+    failed_closed_action_count: int
+
+    def to_record(self) -> dict[str, object]:
+        """Return one tabular group record."""
         return asdict(self)
 
 
@@ -168,6 +273,208 @@ class AnalystApplicationStateStore:
                 for summary in self.list_runs()
             ],
             columns=ANALYST_RUN_TABLE_COLUMNS,
+        )
+
+    def list_groups(
+        self,
+        run_id: str,
+    ) -> tuple[AnalystGroupSummary, ...]:
+        """Return persisted groups for one selected run."""
+        snapshot = self.load_run(run_id)
+        groups = (
+            snapshot.daily_state.network.groups
+            .copy()
+        )
+
+        if groups.empty:
+            return ()
+
+        missing_columns = sorted(
+            set(ANALYST_GROUP_REQUIRED_COLUMNS)
+            - set(groups.columns)
+        )
+
+        if missing_columns:
+            raise AnalystApplicationStateError(
+                "Persisted groups are missing columns: "
+                f"{missing_columns}"
+            )
+
+        queue_counts: dict[
+            str,
+            dict[str, int],
+        ] = {}
+
+        frontier_queue = (
+            snapshot.daily_state.frontier_queue
+        )
+
+        if not frontier_queue.empty:
+            if (
+                "group_ids"
+                not in frontier_queue.columns
+                or "queue_status"
+                not in frontier_queue.columns
+            ):
+                raise AnalystApplicationStateError(
+                    "Persisted frontier queue is missing "
+                    "group_ids or queue_status."
+                )
+
+            for queue_row in (
+                frontier_queue.itertuples(
+                    index=False
+                )
+            ):
+                queue_status = str(
+                    queue_row.queue_status
+                ).strip().upper()
+
+                for group_id in _parse_group_ids(
+                    queue_row.group_ids
+                ):
+                    counts = queue_counts.setdefault(
+                        group_id,
+                        {
+                            "READY": 0,
+                            "FAILED_CLOSED": 0,
+                        },
+                    )
+
+                    if queue_status in counts:
+                        counts[queue_status] += 1
+
+        summaries: list[
+            AnalystGroupSummary
+        ] = []
+
+        for row in groups.itertuples(
+            index=False,
+            name=None,
+        ):
+            group_row = pd.Series(
+                row,
+                index=groups.columns,
+            )
+            group_id = str(
+                group_row["group_id"]
+            ).strip()
+            counts = queue_counts.get(
+                group_id,
+                {
+                    "READY": 0,
+                    "FAILED_CLOSED": 0,
+                },
+            )
+
+            summaries.append(
+                AnalystGroupSummary(
+                    run_id=(
+                        snapshot.manifest.run_id
+                    ),
+                    group_id=group_id,
+                    group_anchor_seed_entity_key=(
+                        str(
+                            group_row[
+                                "group_anchor_seed_entity_key"
+                            ]
+                        ).strip()
+                    ),
+                    group_status=str(
+                        group_row["group_status"]
+                    ).strip(),
+                    customer_count=_integer_value(
+                        group_row,
+                        "customer_count",
+                    ),
+                    counterparty_count=_integer_value(
+                        group_row,
+                        "counterparty_count",
+                    ),
+                    eid_link_count=_integer_value(
+                        group_row,
+                        "eid_link_count",
+                    ),
+                    shared_counterparty_customer_count=(
+                        _integer_value(
+                            group_row,
+                            "shared_counterparty_customer_count",
+                        )
+                    ),
+                    beneficiary_seed_link_count=(
+                        _integer_value(
+                            group_row,
+                            "beneficiary_seed_link_count",
+                        )
+                    ),
+                    customer_assessment_pending_count=(
+                        _integer_value(
+                            group_row,
+                            "customer_assessment_pending_count",
+                        )
+                    ),
+                    counterparty_ai_pending_count=(
+                        _integer_value(
+                            group_row,
+                            "counterparty_ai_pending_count",
+                        )
+                    ),
+                    total_node_count=_integer_value(
+                        group_row,
+                        "total_node_count",
+                    ),
+                    total_edge_count=_integer_value(
+                        group_row,
+                        "total_edge_count",
+                    ),
+                    approved_suspicious_counterparty_count=(
+                        _integer_value(
+                            group_row,
+                            "approved_suspicious_counterparty_count",
+                        )
+                    ),
+                    suppressed_counterparty_count=(
+                        _integer_value(
+                            group_row,
+                            "suppressed_counterparty_count",
+                        )
+                    ),
+                    mule_like_customer_count=(
+                        _integer_value(
+                            group_row,
+                            "mule_like_customer_count",
+                        )
+                    ),
+                    ready_action_count=counts[
+                        "READY"
+                    ],
+                    failed_closed_action_count=(
+                        counts["FAILED_CLOSED"]
+                    ),
+                )
+            )
+
+        return tuple(
+            sorted(
+                summaries,
+                key=lambda summary: (
+                    summary.group_id
+                ),
+            )
+        )
+
+    def group_table(
+        self,
+        run_id: str,
+    ) -> pd.DataFrame:
+        """Return the analyst-visible group table."""
+        return pd.DataFrame.from_records(
+            [
+                summary.to_record()
+                for summary
+                in self.list_groups(run_id)
+            ],
+            columns=ANALYST_GROUP_TABLE_COLUMNS,
         )
 
     def load_run(
