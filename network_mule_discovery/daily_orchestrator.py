@@ -21,6 +21,9 @@ from network_mule_discovery.customer_behavioral_features import (
 from network_mule_discovery.daily_ai_runner import (
     DailyAiSettings,
 )
+from network_mule_discovery.production_ai_runtime import (
+    ProductionAiStartupError,
+)
 from network_mule_discovery.daily_state import (
     CsvDailyStateStore,
     DailyIncrementalPlan,
@@ -445,11 +448,38 @@ def run_counterparty_ai_phase(
             adapter_factory
         )
 
-    counterparty_frontier = (
-        run_counterparty_ai_frontier(
-            **run_kwargs
+    try:
+        counterparty_frontier = (
+            run_counterparty_ai_frontier(
+                **run_kwargs
+            )
         )
-    )
+    except Exception as exc:
+        failure_reason = (
+            ProductionAiStartupError.code
+            if isinstance(
+                exc,
+                ProductionAiStartupError,
+            )
+            else "COUNTERPARTY_AI_PHASE_FAILED"
+        )
+
+        try:
+            _persist_run_outcome(
+                state_directory=(
+                    resolved_state_directory
+                ),
+                termination_status="FAILED",
+                termination_reason=failure_reason,
+            )
+        except Exception as finalization_exc:
+            exc.add_note(
+                "Run failure finalization also failed: "
+                f"{type(finalization_exc).__name__}: "
+                f"{finalization_exc}"
+            )
+
+        raise
 
     return DailyCounterpartyAiPhaseResult(
         initial_discovery=initial_discovery,
@@ -993,6 +1023,7 @@ def _persist_run_outcome(
     if normalized_status not in {
         "STOPPED",
         "TERMINATED",
+        "FAILED",
     }:
         raise SourceContractError(
             "Unsupported final run status: "
