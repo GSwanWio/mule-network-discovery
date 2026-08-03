@@ -1,4 +1,4 @@
-"""Smoke test for the persisted-state Streamlit interface."""
+"""Smoke test for the analyst-first Streamlit interface."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from smoke_test_analyst_application_runs import (
 
 
 def main() -> None:
-    """Validate the persisted analyst interface."""
+    """Validate the analyst-first application shell."""
     with TemporaryDirectory() as directory:
         root = Path(directory)
         source_directory = root / "source"
@@ -66,14 +66,20 @@ def main() -> None:
             run_status="RUNNING",
         )
 
-        with patch.dict(
-            os.environ,
-            {
-                "MULE_NETWORK_STATE_DIRECTORY": (
-                    str(state_directory)
-                )
-            },
-            clear=False,
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MULE_NETWORK_STATE_DIRECTORY": (
+                        str(state_directory)
+                    )
+                },
+                clear=False,
+            ),
+            patch(
+                "streamlit_cytoscape.streamlit_cytoscape",
+                return_value=None,
+            ) as graph_component,
         ):
             app = AppTest.from_file(
                 str(APP_PATH),
@@ -85,48 +91,51 @@ def main() -> None:
         assert len(app.title) == 1
         assert (
             app.title[0].value
-            == "Mule Network Discovery"
+            == "Mule Network Investigation"
         )
 
-        assert len(app.selectbox) == 2
-        assert (
+        assert len(app.selectbox) == 1
+        assert str(
             app.selectbox[0].value
-            == current_run_id
+        ).startswith(current_run_id)
+
+        assert len(app.metric) == 5
+        assert len(app.dataframe) == 0
+        assert len(app.checkbox) == 0
+
+        assert graph_component.call_count == 1
+
+        graph_arguments = (
+            graph_component.call_args.kwargs
         )
-        assert app.selectbox[1].value is not None
-
-        assert len(app.metric) == 18
-        assert len(app.dataframe) >= 4
-        assert len(app.warning) == 1
-        assert len(app.checkbox) == 1
-        assert app.checkbox[0].value is False
-
-        warning_text = app.warning[0].value
 
         assert (
-            "stored feature hash matches"
-            in warning_text
+            graph_arguments["layout"]["name"]
+            == "breadthfirst"
         )
+        assert graph_arguments["height"] == 680
+        assert graph_arguments["node_actions"] == []
+        assert graph_arguments["edge_actions"] == []
+        assert len(graph_arguments["events"]) == 1
 
         app_source = APP_PATH.read_text(
             encoding="utf-8"
         )
 
-        assert "data/demo/output" not in app_source
+        assert "st.graphviz_chart" not in app_source
+        assert "Show full audit graph" not in app_source
+        assert "st.dataframe" not in app_source
+        assert "st.tabs" not in app_source
         assert (
-            "MULE_NETWORK_STATE_DIRECTORY"
+            "build_analyst_investigation_view"
             in app_source
         )
         assert (
-            "build_analyst_network_display_projection"
+            "selected_investigation_node_id"
             in app_source
         )
         assert (
-            "Show full audit graph"
-            in app_source
-        )
-        assert (
-            "customers collapsed"
+            "Only AI-approved expansion paths"
             in app_source
         )
         assert (
@@ -135,22 +144,15 @@ def main() -> None:
         )
 
         print(
-            "Persisted-state Streamlit interface "
+            "Analyst-first Streamlit interface "
             "smoke test passed."
         )
-        print("Persisted runs available: 2")
-        print("Current run selected: passed")
-        print("Selected group loaded: passed")
-        print(
-            f"Metrics rendered: {len(app.metric)}"
-        )
-        print(
-            f"Dataframes rendered: "
-            f"{len(app.dataframe)}"
-        )
-        print("Demo-output dependency removed: passed")
-        print("Collapsed projection integrated: passed")
-        print("Full audit graph default: hidden")
+        print("Investigation selector: passed")
+        print("Interactive graph rendered: passed")
+        print("Breadth-first layout: passed")
+        print("Focused node review card: passed")
+        print("Raw dataframes displayed: 0")
+        print("Full audit graph exposed: no")
         print("External live API calls made: 0")
 
 
