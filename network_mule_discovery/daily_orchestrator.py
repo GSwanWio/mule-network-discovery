@@ -649,9 +649,36 @@ def run_customer_ai_phase(
             adapter_factory
         )
 
-    customer_frontier = run_customer_ai_frontier(
-        **run_kwargs
-    )
+    try:
+        customer_frontier = run_customer_ai_frontier(
+            **run_kwargs
+        )
+    except Exception as exc:
+        failure_reason = (
+            ProductionAiStartupError.code
+            if isinstance(
+                exc,
+                ProductionAiStartupError,
+            )
+            else "CUSTOMER_AI_PHASE_FAILED"
+        )
+
+        try:
+            _persist_run_outcome(
+                state_directory=(
+                    resolved_state_directory
+                ),
+                termination_status="FAILED",
+                termination_reason=failure_reason,
+            )
+        except Exception as finalization_exc:
+            exc.add_note(
+                "Run failure finalization also failed: "
+                f"{type(finalization_exc).__name__}: "
+                f"{finalization_exc}"
+            )
+
+        raise
 
     return DailyCustomerAiPhaseResult(
         counterparty_phase=counterparty_phase,
