@@ -1358,11 +1358,44 @@ def run_breadth_first_frontier(
                     "adapter_factory"
                 ] = counterparty_adapter_factory
 
-            recursive_counterparty = (
-                run_recursive_counterparty_frontier(
-                    **run_kwargs
+            try:
+                recursive_counterparty = (
+                    run_recursive_counterparty_frontier(
+                        **run_kwargs
+                    )
                 )
-            )
+            except Exception as exc:
+                failure_reason = (
+                    ProductionAiStartupError.code
+                    if isinstance(
+                        exc,
+                        ProductionAiStartupError,
+                    )
+                    else (
+                        "RECURSIVE_COUNTERPARTY_"
+                        "AI_PHASE_FAILED"
+                    )
+                )
+
+                try:
+                    _persist_run_outcome(
+                        state_directory=(
+                            resolved_state_directory
+                        ),
+                        termination_status="FAILED",
+                        termination_reason=(
+                            failure_reason
+                        ),
+                    )
+                except Exception as finalization_exc:
+                    exc.add_note(
+                        "Run failure finalization also "
+                        "failed: "
+                        f"{type(finalization_exc).__name__}: "
+                        f"{finalization_exc}"
+                    )
+
+                raise
             supplemental_payloads = (
                 _merge_supplemental_payloads(
                     supplemental_payloads,
