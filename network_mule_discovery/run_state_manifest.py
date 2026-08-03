@@ -23,6 +23,10 @@ from network_mule_discovery.daily_state import (
 from network_mule_discovery.operational_resilience import (
     OPERATIONAL_RESILIENCE_GATE_FILENAME,
 )
+from network_mule_discovery.production_ai_runtime import (
+    PRODUCTION_AI_RUNTIME_FILENAME,
+    PRODUCTION_AI_STARTUP_FAILURE_FILENAME,
+)
 from network_mule_discovery.source_contracts import (
     SourceMetadata,
 )
@@ -44,6 +48,8 @@ RUN_STATE_ARTIFACT_FILENAMES = (
     EXPANSION_LEDGER_FILENAME,
     FRONTIER_QUEUE_FILENAME,
     AI_CALL_LEDGER_FILENAME,
+    PRODUCTION_AI_RUNTIME_FILENAME,
+    PRODUCTION_AI_STARTUP_FAILURE_FILENAME,
     TECHNICAL_REPROCESSING_LEDGER_FILENAME,
     OPERATIONAL_RESILIENCE_GATE_FILENAME,
 )

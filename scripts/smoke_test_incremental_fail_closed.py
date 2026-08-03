@@ -71,6 +71,12 @@ class MixedResultAdapter:
         self.failed_key = failed_key
         self.completed_key = completed_key
         self.calls: list[str] = []
+        self.last_call_metadata = {
+            "model": "fail-closed-test-model",
+            "prompt_version": (
+                "fail-closed-test-prompt-v1"
+            ),
+        }
 
     def decide(
         self,
@@ -272,6 +278,24 @@ def main() -> None:
             "COMPLETED": 1,
         }
 
+        failed_execution = (
+            result.executed_actions.loc[
+                result.executed_actions[
+                    "execution_status"
+                ].eq("FAILED_CLOSED")
+            ]
+            .iloc[0]
+        )
+
+        assert (
+            failed_execution["model"]
+            == "fail-closed-test-model"
+        )
+        assert (
+            failed_execution["prompt_version"]
+            == "fail-closed-test-prompt-v1"
+        )
+
         assert len(
             result.generated_decisions
         ) == 1
@@ -398,6 +422,8 @@ def main() -> None:
     print("Selected AI actions: 2")
     print("Completed AI actions: 1")
     print("Failed-closed AI actions: 1")
+    print("Failed-call model identity: passed")
+    print("Failed-call prompt identity: passed")
     print("Successful decision persisted: passed")
     print("Failed item decision created: 0")
     print("Unrelated item continued: passed")
