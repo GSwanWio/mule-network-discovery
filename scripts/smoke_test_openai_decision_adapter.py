@@ -643,6 +643,18 @@ def main() -> None:
         ),
         "AI_API_ERROR",
     )
+    assert (
+        error_adapter.last_call_metadata[
+            "model"
+        ]
+        == "test-model"
+    )
+    assert (
+        error_adapter.last_call_metadata[
+            "prompt_version"
+        ]
+        == expected_counterparty_prompt_version
+    )
 
     assert_error_code(
         lambda: adapter.decide(
@@ -678,7 +690,7 @@ def main() -> None:
     print("Incomplete response handling: passed")
     print("Response trace metadata: passed")
     print("Completed-output schema handling: passed")
-    print("API failure handling: passed")
+    print("API failure identity audit: passed")
     print("Evidence hash protection: passed")
     print("Live API calls made: 0")
 

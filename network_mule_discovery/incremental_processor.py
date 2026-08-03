@@ -335,6 +335,10 @@ def execute_incremental_ai_actions(
             )
 
         except Exception as exc:
+            metadata = _adapter_metadata(
+                decision_adapter
+            )
+
             error_code = str(
                 getattr(
                     exc,
@@ -351,12 +355,20 @@ def execute_incremental_ai_actions(
                     "response_id",
                     "",
                 )
+                or metadata.get(
+                    "response_id",
+                    "",
+                )
                 or ""
             )
 
             request_id = str(
                 getattr(
                     exc,
+                    "request_id",
+                    "",
+                )
+                or metadata.get(
                     "request_id",
                     "",
                 )
@@ -369,12 +381,20 @@ def execute_incremental_ai_actions(
                     "response_status",
                     "",
                 )
+                or metadata.get(
+                    "response_status",
+                    "",
+                )
                 or ""
             )
 
             incomplete_reason = str(
                 getattr(
                     exc,
+                    "incomplete_reason",
+                    "",
+                )
+                or metadata.get(
                     "incomplete_reason",
                     "",
                 )
@@ -387,6 +407,10 @@ def execute_incremental_ai_actions(
                     "input_tokens",
                     "",
                 )
+                or metadata.get(
+                    "input_tokens",
+                    "",
+                )
                 or ""
             )
 
@@ -396,12 +420,20 @@ def execute_incremental_ai_actions(
                     "output_tokens",
                     "",
                 )
+                or metadata.get(
+                    "output_tokens",
+                    "",
+                )
                 or ""
             )
 
             reasoning_tokens = str(
                 getattr(
                     exc,
+                    "reasoning_tokens",
+                    "",
+                )
+                or metadata.get(
                     "reasoning_tokens",
                     "",
                 )
@@ -419,8 +451,14 @@ def execute_incremental_ai_actions(
                     "confidence": "",
                     "rationale": "",
                     "key_evidence_json": "[]",
-                    "model": "",
-                    "prompt_version": "",
+                    "model": metadata.get(
+                        "model",
+                        "",
+                    ),
+                    "prompt_version": metadata.get(
+                        "prompt_version",
+                        "",
+                    ),
                     "error_code": error_code,
                     "error_message": error_message,
                     "response_id": response_id,

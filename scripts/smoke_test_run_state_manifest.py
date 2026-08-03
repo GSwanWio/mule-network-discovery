@@ -77,6 +77,13 @@ def main() -> None:
             first.artifact_filenames
             == RUN_STATE_ARTIFACT_FILENAMES
         )
+        assert len(
+            first.artifact_filenames
+        ) == 11
+        assert (
+            "production_ai_runtime.json"
+            in first.artifact_filenames
+        )
         assert (
             store.path.name
             == RUN_STATE_MANIFEST_FILENAME
@@ -134,7 +141,7 @@ def main() -> None:
         )
         print("Deterministic run ID: passed")
         print("Source snapshot identity: passed")
-        print("Persisted artifact contract: 9 files")
+        print("Persisted artifact contract: 11 files")
         print("Atomic JSON persistence: passed")
         print("Idempotent same-run restart: passed")
         print("Historical daily runs retained: 2")
