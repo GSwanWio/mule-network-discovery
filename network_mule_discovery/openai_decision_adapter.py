@@ -597,6 +597,17 @@ class OpenAIDecisionAdapter:
             base_prompt_version=self.prompt_version,
         )
 
+        self.last_call_metadata = {
+            "model": self.model,
+            "prompt_version": (
+                resolved_prompt_version
+            ),
+            "subject_type": subject_type,
+            "subject_key": subject_key,
+            "round_number": round_number,
+            "sequence_number": sequence_number,
+        }
+
         request_payload = {
             "subject_type": subject_type,
             "subject_key": subject_key,
@@ -659,6 +670,7 @@ class OpenAIDecisionAdapter:
         )
 
         self.last_call_metadata = {
+            **(self.last_call_metadata or {}),
             **metadata,
             "model": self.model,
             "prompt_version": (

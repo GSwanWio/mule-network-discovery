@@ -24,6 +24,13 @@ from network_mule_discovery.incremental_processor import (
 from network_mule_discovery.openai_decision_adapter import (
     OpenAIDecisionAdapter,
 )
+from network_mule_discovery.production_ai_runtime import (
+    JsonProductionAiRuntimeStore,
+    JsonProductionAiStartupFailureStore,
+    ProductionAiStartupError,
+    build_production_ai_runtime,
+    build_production_ai_startup_failure,
+)
 from network_mule_discovery.schemas import (
     parse_run_date,
 )
@@ -429,7 +436,7 @@ def run_controlled_daily_ai(
     adapter_factory: Callable[
         [],
         object,
-    ] = OpenAIDecisionAdapter.from_environment,
+    ] | None = None,
     allowed_action_types: set[str] | frozenset[str] | None = None,
     supplemental_subject_payloads: pd.DataFrame | None = None,
 ) -> ControlledDailyAiRunResult:
@@ -513,7 +520,41 @@ def run_controlled_daily_ai(
             ),
         )
 
-    decision_adapter = adapter_factory()
+    if adapter_factory is None:
+        try:
+            production_runtime = (
+                build_production_ai_runtime(
+                    settings
+                )
+            )
+            JsonProductionAiRuntimeStore(
+                state_directory
+            ).save(
+                production_runtime
+            )
+            decision_adapter = (
+                OpenAIDecisionAdapter
+                .from_environment()
+            )
+
+        except Exception as exc:
+            failure = (
+                build_production_ai_startup_failure(
+                    exc
+                )
+            )
+            JsonProductionAiStartupFailureStore(
+                state_directory
+            ).save(failure)
+
+            raise ProductionAiStartupError(
+                "Production live-AI startup failed: "
+                f"{failure.error_type}: "
+                f"{failure.error_message}"
+            ) from exc
+
+    else:
+        decision_adapter = adapter_factory()
 
     execution_result: IncrementalAiExecutionResult = (
         execute_incremental_ai_actions(
