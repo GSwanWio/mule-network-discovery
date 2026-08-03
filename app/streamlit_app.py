@@ -22,6 +22,10 @@ from network_mule_discovery.analyst_application_state import (
     AnalystApplicationStateError,
     AnalystApplicationStateStore,
 )
+from network_mule_discovery.analyst_feedback import (
+    AnalystFeedbackError,
+    CsvAnalystFeedbackStore,
+)
 from network_mule_discovery.analyst_group_evidence import (
     AnalystGroupEvidenceStore,
 )
@@ -44,6 +48,7 @@ from network_mule_discovery.consolidated_state import (
 
 
 STATE_DIRECTORY_ENV_VAR = "MULE_NETWORK_STATE_DIRECTORY"
+ANALYST_ID_ENV_VAR = "MULE_ANALYST_ID"
 DEFAULT_STATE_DIRECTORY = PROJECT_ROOT / "data/state"
 
 
@@ -372,8 +377,183 @@ def _render_legend() -> None:
     )
 
 
-def _render_selected_node(
+def _feedback_subject(
     node: pd.Series,
+) -> tuple[str, str]:
+    """Return the AI subject represented by one node."""
+    subject_type = _clean_text(
+        node.get("node_type")
+    ).upper()
+
+    if subject_type == "CUSTOMER":
+        subject_key = _clean_text(
+            node.get("entity_key")
+        )
+    elif subject_type == "COUNTERPARTY":
+        subject_key = _clean_text(
+            node.get("counterparty_key")
+        )
+    else:
+        subject_key = ""
+
+    if not subject_type or not subject_key:
+        raise AnalystFeedbackError(
+            "The selected node has no reviewable "
+            "AI subject."
+        )
+
+    return subject_type, subject_key
+
+
+def _render_analyst_feedback(
+    *,
+    node: pd.Series,
+    feedback_store: CsvAnalystFeedbackStore,
+    run_id: str,
+    group_id: str,
+) -> None:
+    """Render analyst validation without overriding AI."""
+    decision_category = _clean_text(
+        node.get("decision_category")
+    ).upper()
+    ai_decision = _clean_text(
+        node.get("ai_decision")
+    ).upper()
+
+    if (
+        bool(node.get("is_seed"))
+        or decision_category in {
+            "PENDING",
+            "FAILED",
+        }
+        or not ai_decision
+        or ai_decision == "PENDING"
+    ):
+        return
+
+    node_id = _clean_text(
+        node.get("node_id")
+    )
+    subject_type, subject_key = (
+        _feedback_subject(node)
+    )
+
+    st.divider()
+    st.markdown("#### Analyst review")
+    st.caption(
+        "Confirm whether the AI assessment is correct. "
+        "This records feedback and does not change the "
+        "AI decision or network expansion."
+    )
+
+    latest = feedback_store.latest_for_node(
+        run_id=run_id,
+        group_id=group_id,
+        node_id=node_id,
+    )
+
+    if latest is not None:
+        if latest.feedback == "AI_CORRECT":
+            st.success(
+                "Latest analyst review: "
+                "AI marked correct"
+            )
+        else:
+            st.warning(
+                "Latest analyst review: "
+                "AI marked incorrect"
+            )
+
+        if latest.analyst_notes:
+            st.caption(
+                f"Previous note: "
+                f"{latest.analyst_notes}"
+            )
+
+    form_key = (
+        f"analyst-feedback::"
+        f"{run_id}::{group_id}::{node_id}"
+    )
+
+    with st.form(
+        form_key,
+        clear_on_submit=True,
+    ):
+        selected_feedback = st.radio(
+            "Was the AI decision correct?",
+            options=(
+                "AI correct",
+                "AI incorrect",
+            ),
+            index=None,
+            horizontal=True,
+        )
+        analyst_notes = st.text_area(
+            "Review note",
+            placeholder=(
+                "Optional context explaining the review."
+            ),
+            height=90,
+        )
+        submitted = st.form_submit_button(
+            "Submit review",
+            use_container_width=True,
+        )
+
+    if not submitted:
+        return
+
+    if selected_feedback is None:
+        st.warning(
+            "Select whether the AI decision was "
+            "correct or incorrect."
+        )
+        return
+
+    feedback_value = (
+        "AI_CORRECT"
+        if selected_feedback == "AI correct"
+        else "AI_INCORRECT"
+    )
+
+    try:
+        feedback_store.submit(
+            run_id=run_id,
+            group_id=group_id,
+            node_id=node_id,
+            subject_type=subject_type,
+            subject_key=subject_key,
+            ai_decision=ai_decision,
+            feedback=feedback_value,
+            analyst_notes=analyst_notes,
+            analyst_id=(
+                os.getenv(
+                    ANALYST_ID_ENV_VAR,
+                    "",
+                ).strip()
+                or "UNSPECIFIED"
+            ),
+        )
+    except AnalystFeedbackError as exc:
+        st.error(
+            "The analyst review could not be saved: "
+            f"{exc}"
+        )
+        return
+
+    st.success(
+        "Review saved. The AI decision remains "
+        "unchanged."
+    )
+    st.rerun()
+
+
+def _render_selected_node(
+    *,
+    node: pd.Series,
+    feedback_store: CsvAnalystFeedbackStore,
+    run_id: str,
+    group_id: str,
 ) -> None:
     """Render a focused AI decision card."""
     label = (
@@ -507,6 +687,13 @@ def _render_selected_node(
             "customers are not displayed."
         )
 
+    _render_analyst_feedback(
+        node=node,
+        feedback_store=feedback_store,
+        run_id=run_id,
+        group_id=group_id,
+    )
+
 
 def main() -> None:
     """Render the analyst-first investigation application."""
@@ -515,6 +702,9 @@ def main() -> None:
     state_directory = resolve_state_directory()
 
     try:
+        feedback_store = CsvAnalystFeedbackStore(
+            state_directory
+        )
         application = AnalystApplicationStateStore(
             state_directory
         )
@@ -749,7 +939,10 @@ def main() -> None:
     with decision_column:
         with st.container(border=True):
             _render_selected_node(
-                selected_node
+                node=selected_node,
+                feedback_store=feedback_store,
+                run_id=run_id,
+                group_id=group_id,
             )
 
 
