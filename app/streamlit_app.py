@@ -193,6 +193,11 @@ def _inject_styles() -> None:
             color: #1E40AF;
         }
 
+        .mule-decision-DETERMINISTIC {
+            background: #CCFBF1;
+            color: #115E59;
+        }
+
         .mule-decision-CONTINUE {
             background: #FFEDD5;
             color: #9A3412;
