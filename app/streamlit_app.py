@@ -245,6 +245,10 @@ def _inject_styles() -> None:
             background: #2563EB;
         }
 
+        .mule-dot-deterministic {
+            background: #0F766E;
+        }
+
         .mule-dot-customer {
             background: #DC2626;
         }
@@ -371,6 +375,10 @@ def _render_legend() -> None:
                 Confirmed seed
             </span>
             <span class="mule-legend-item">
+                <span class="mule-dot mule-dot-deterministic"></span>
+                Deterministic EID link
+            </span>
+            <span class="mule-legend-item">
                 <span class="mule-dot mule-dot-counterparty"></span>
                 AI expanded counterparty
             </span>
@@ -434,6 +442,7 @@ def _render_analyst_feedback(
     if (
         bool(node.get("is_seed"))
         or decision_category in {
+            "DETERMINISTIC",
             "PENDING",
             "FAILED",
         }
@@ -566,7 +575,7 @@ def _render_selected_node(
     run_id: str,
     group_id: str,
 ) -> None:
-    """Render a focused AI decision card."""
+    """Render a focused investigation outcome card."""
     label = (
         _clean_text(node.get("display_label"))
         or _clean_text(node.get("node_id"))
@@ -624,18 +633,39 @@ def _render_selected_node(
 
     detail_columns[2].caption("Confidence")
     detail_columns[2].write(
-        _confidence_label(
+        "Not required"
+        if decision_category == "DETERMINISTIC"
+        else _confidence_label(
             node.get("confidence")
         )
     )
 
     st.divider()
 
-    if bool(node.get("is_seed")):
+    is_seed = bool(node.get("is_seed"))
+
+    if is_seed:
         st.markdown("#### Investigation starting point")
         st.write(
             "This customer triggered the network "
             "investigation and forms depth zero."
+        )
+    elif decision_category == "DETERMINISTIC":
+        st.markdown("#### Deterministic relationship")
+        st.write(
+            expansion_outcome
+            or (
+                "The customer was included through "
+                "a deterministic identity link."
+            )
+        )
+
+        st.markdown("#### Why no AI decision was required")
+        st.write(
+            "The customer shares the same valid "
+            "Emirates ID as the confirmed seed. "
+            "This relationship is included directly "
+            "under the EID-linking contract."
         )
     else:
         st.markdown("#### AI outcome")
@@ -666,6 +696,7 @@ def _render_selected_node(
                 "available for this node."
             )
 
+    if not is_seed:
         st.markdown("#### Discovery path")
 
         parent_label = _clean_text(
@@ -732,7 +763,7 @@ def main() -> None:
     st.sidebar.markdown("## Investigations")
     st.sidebar.caption(
         "Select a discovered network to review "
-        "the AI expansion journey."
+        "the investigation journey."
     )
 
     if st.sidebar.button(
@@ -820,7 +851,7 @@ def main() -> None:
 
     st.markdown(
         '<div class="mule-kicker">'
-        "AI-guided network investigation"
+        "Network investigation"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -849,7 +880,7 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    metric_columns = st.columns(5)
+    metric_columns = st.columns(6)
 
     metric_columns[0].metric(
         "Journey depth",
@@ -864,10 +895,14 @@ def main() -> None:
         investigation.stopped_node_count,
     )
     metric_columns[3].metric(
+        "Deterministic links",
+        investigation.deterministic_node_count,
+    )
+    metric_columns[4].metric(
         "Awaiting AI",
         investigation.pending_node_count,
     )
-    metric_columns[4].metric(
+    metric_columns[5].metric(
         "Customers summarized",
         investigation.collapsed_customer_count,
     )
@@ -884,11 +919,12 @@ def main() -> None:
     )
 
     with graph_column:
-        st.subheader("AI investigation path")
+        st.subheader("Investigation path")
         st.caption(
-            "Only AI-approved expansion paths and "
+            "AI-approved expansion paths, "
+            "deterministic identity links, and "
             "explicit stopping points are shown. "
-            "Click a node to review the decision."
+            "Click a node to review its outcome."
         )
         _render_legend()
 
