@@ -42,6 +42,10 @@ from network_mule_discovery.analyst_investigation_graph import (
 from network_mule_discovery.analyst_investigation_view import (
     build_analyst_investigation_view,
 )
+from network_mule_discovery.analyst_review_queue import (
+    AnalystReviewQueue,
+    build_analyst_review_queue,
+)
 from network_mule_discovery.consolidated_state import (
     ConsolidatedStateError,
 )
@@ -50,6 +54,17 @@ from network_mule_discovery.consolidated_state import (
 STATE_DIRECTORY_ENV_VAR = "MULE_NETWORK_STATE_DIRECTORY"
 ANALYST_ID_ENV_VAR = "MULE_ANALYST_ID"
 DEFAULT_STATE_DIRECTORY = PROJECT_ROOT / "data/state"
+
+
+def _analyst_id() -> str:
+    """Return the analyst identity used for review progress."""
+    return (
+        os.getenv(
+            ANALYST_ID_ENV_VAR,
+            "",
+        ).strip()
+        or "UNSPECIFIED"
+    )
 
 
 st.set_page_config(
@@ -399,7 +414,7 @@ def _render_legend() -> None:
 def _feedback_subject(
     node: pd.Series,
 ) -> tuple[str, str]:
-    """Return the AI subject represented by one node."""
+    """Return the review subject represented by one node."""
     subject_type = _clean_text(
         node.get("node_type")
     ).upper()
@@ -417,11 +432,58 @@ def _feedback_subject(
 
     if not subject_type or not subject_key:
         raise AnalystFeedbackError(
-            "The selected node has no reviewable "
-            "AI subject."
+            "The selected node has no reviewable subject."
         )
 
     return subject_type, subject_key
+
+
+def _latest_feedback_for_analyst(
+    *,
+    feedback_store: CsvAnalystFeedbackStore,
+    run_id: str,
+    group_id: str,
+    node_id: str,
+    analyst_id: str,
+) -> pd.Series | None:
+    """Return this analyst's latest feedback for one node."""
+    feedback = feedback_store.load()
+
+    if feedback.empty:
+        return None
+
+    scoped = feedback.loc[
+        feedback["run_id"]
+        .astype("string")
+        .str.strip()
+        .eq(run_id)
+        & feedback["group_id"]
+        .astype("string")
+        .str.strip()
+        .eq(group_id)
+        & feedback["node_id"]
+        .astype("string")
+        .str.strip()
+        .eq(node_id)
+        & feedback["analyst_id"]
+        .astype("string")
+        .str.strip()
+        .eq(analyst_id)
+    ].copy()
+
+    if scoped.empty:
+        return None
+
+    return (
+        scoped.sort_values(
+            by=[
+                "submitted_at",
+                "feedback_id",
+            ],
+            kind="stable",
+        )
+        .iloc[-1]
+    )
 
 
 def _render_analyst_feedback(
@@ -430,8 +492,9 @@ def _render_analyst_feedback(
     feedback_store: CsvAnalystFeedbackStore,
     run_id: str,
     group_id: str,
+    analyst_id: str,
 ) -> None:
-    """Render analyst validation without overriding AI."""
+    """Render one mandatory node-decision review."""
     decision_category = _clean_text(
         node.get("decision_category")
     ).upper()
@@ -442,7 +505,6 @@ def _render_analyst_feedback(
     if (
         bool(node.get("is_seed"))
         or decision_category in {
-            "DETERMINISTIC",
             "PENDING",
             "FAILED",
         }
@@ -461,38 +523,40 @@ def _render_analyst_feedback(
     st.divider()
     st.markdown("#### Analyst review")
     st.caption(
-        "Confirm whether the AI assessment is correct. "
-        "This records feedback and does not change the "
-        "AI decision or network expansion."
+        "Confirm whether this node decision is correct. "
+        "The review is recorded as an immutable event and "
+        "does not change the persisted decision or network."
     )
 
-    latest = feedback_store.latest_for_node(
+    latest = _latest_feedback_for_analyst(
+        feedback_store=feedback_store,
         run_id=run_id,
         group_id=group_id,
         node_id=node_id,
+        analyst_id=analyst_id,
     )
 
     if latest is not None:
-        if latest.feedback == "AI_CORRECT":
+        if _clean_text(latest.get("feedback")) == "AI_CORRECT":
             st.success(
-                "Latest analyst review: "
-                "AI marked correct"
+                "Your latest review: decision marked correct"
             )
         else:
             st.warning(
-                "Latest analyst review: "
-                "AI marked incorrect"
+                "Your latest review: decision marked incorrect"
             )
 
-        if latest.analyst_notes:
+        previous_note = _clean_text(
+            latest.get("analyst_notes")
+        )
+        if previous_note:
             st.caption(
-                f"Previous note: "
-                f"{latest.analyst_notes}"
+                f"Your previous note: {previous_note}"
             )
 
     form_key = (
-        f"analyst-feedback::"
-        f"{run_id}::{group_id}::{node_id}"
+        "analyst-feedback::"
+        f"{run_id}::{group_id}::{node_id}::{analyst_id}"
     )
 
     with st.form(
@@ -500,10 +564,10 @@ def _render_analyst_feedback(
         clear_on_submit=True,
     ):
         selected_feedback = st.radio(
-            "Was the AI decision correct?",
+            "Was this node decision correct?",
             options=(
-                "AI correct",
-                "AI incorrect",
+                "Decision correct",
+                "Decision incorrect",
             ),
             index=None,
             horizontal=True,
@@ -511,7 +575,8 @@ def _render_analyst_feedback(
         analyst_notes = st.text_area(
             "Review note",
             placeholder=(
-                "Optional context explaining the review."
+                "Optional context explaining how the "
+                "evidence supports or contradicts the decision."
             ),
             height=90,
         )
@@ -525,14 +590,14 @@ def _render_analyst_feedback(
 
     if selected_feedback is None:
         st.warning(
-            "Select whether the AI decision was "
+            "Select whether the node decision was "
             "correct or incorrect."
         )
         return
 
     feedback_value = (
         "AI_CORRECT"
-        if selected_feedback == "AI correct"
+        if selected_feedback == "Decision correct"
         else "AI_INCORRECT"
     )
 
@@ -546,13 +611,7 @@ def _render_analyst_feedback(
             ai_decision=ai_decision,
             feedback=feedback_value,
             analyst_notes=analyst_notes,
-            analyst_id=(
-                os.getenv(
-                    ANALYST_ID_ENV_VAR,
-                    "",
-                ).strip()
-                or "UNSPECIFIED"
-            ),
+            analyst_id=analyst_id,
         )
     except AnalystFeedbackError as exc:
         st.error(
@@ -562,11 +621,232 @@ def _render_analyst_feedback(
         return
 
     st.success(
-        "Review saved. The AI decision remains "
-        "unchanged."
+        "Review saved. The persisted node decision "
+        "remains unchanged."
     )
     st.rerun()
 
+
+def _review_filter_rows(
+    queue: AnalystReviewQueue,
+    selected_filter: str,
+) -> pd.DataFrame:
+    """Filter review rows for one analyst workflow view."""
+    rows = queue.rows.copy()
+
+    if selected_filter == "Unreviewed":
+        rows = rows.loc[
+            rows["review_status"].eq("UNREVIEWED")
+        ]
+    elif selected_filter == "Suspicious":
+        rows = rows.loc[
+            rows["review_outcome"].eq("SUSPICIOUS")
+        ]
+    elif selected_filter == "Non-suspicious":
+        rows = rows.loc[
+            rows["review_outcome"].eq("NON_SUSPICIOUS")
+        ]
+    elif selected_filter == "Disagreed":
+        rows = rows.loc[
+            rows["review_status"].eq(
+                "REVIEWED_INCORRECT"
+            )
+        ]
+
+    return rows.reset_index(drop=True)
+
+
+def _next_unreviewed_node_id(
+    queue: AnalystReviewQueue,
+    selected_node_id: str,
+) -> str | None:
+    """Return the next unreviewed decision in queue order."""
+    unreviewed = queue.rows.loc[
+        queue.rows["review_status"].eq("UNREVIEWED")
+    ].sort_values(
+        by=["review_order", "node_id"],
+        kind="stable",
+    )
+
+    if unreviewed.empty:
+        return None
+
+    selected_rows = queue.rows.loc[
+        queue.rows["node_id"]
+        .astype("string")
+        .eq(selected_node_id)
+    ]
+
+    if selected_rows.empty:
+        return str(unreviewed.iloc[0]["node_id"])
+
+    selected_order = int(
+        selected_rows.iloc[0]["review_order"]
+    )
+    later = unreviewed.loc[
+        unreviewed["review_order"] > selected_order
+    ]
+
+    target = (
+        later.iloc[0]
+        if not later.empty
+        else unreviewed.iloc[0]
+    )
+    return str(target["node_id"])
+
+
+def _review_queue_button_label(
+    row: object,
+) -> str:
+    """Return a compact direct-navigation queue label."""
+    review_status = _clean_text(
+        getattr(row, "review_status", "")
+    ).upper()
+    review_outcome = _clean_text(
+        getattr(row, "review_outcome", "")
+    ).upper()
+
+    review_icon = {
+        "UNREVIEWED": "○",
+        "REVIEWED_CORRECT": "✓",
+        "REVIEWED_INCORRECT": "!",
+    }.get(review_status, "○")
+    outcome_icon = (
+        "🔴"
+        if review_outcome == "SUSPICIOUS"
+        else "🟢"
+    )
+
+    display_label = _clean_text(
+        getattr(row, "display_label", "")
+    )
+    decision_label = _clean_text(
+        getattr(row, "decision_label", "")
+    )
+
+    return (
+        f"{review_icon} {outcome_icon} "
+        f"{display_label} · {decision_label}"
+    )
+
+
+def _render_decision_review_queue(
+    *,
+    queue: AnalystReviewQueue,
+    selection_state_key: str,
+    selected_node_id: str,
+) -> None:
+    """Render one direct-click node review workflow."""
+    st.subheader("Decision review")
+    st.caption(
+        "Select a decision to open it. The graph and "
+        "evidence panel use the same selected node."
+    )
+
+    progress_columns = st.columns(3)
+    progress_columns[0].metric(
+        "Reviewed",
+        queue.reviewed_count,
+    )
+    progress_columns[1].metric(
+        "Remaining",
+        queue.unreviewed_count,
+    )
+    progress_columns[2].metric(
+        "Disagreed",
+        queue.incorrect_count,
+    )
+
+    st.progress(
+        queue.completion_percentage / 100.0,
+        text=(
+            f"{queue.reviewed_count} of "
+            f"{queue.total_required} decisions reviewed "
+            f"({queue.completion_percentage:.1f}%)"
+        ),
+    )
+
+    if queue.review_complete:
+        st.success(
+            "Decision review complete for this analyst."
+        )
+    else:
+        next_node_id = _next_unreviewed_node_id(
+            queue,
+            selected_node_id,
+        )
+        if next_node_id and st.button(
+            "Next unreviewed",
+            type="primary",
+            use_container_width=True,
+            key=(
+                "decision-review-next::"
+                f"{queue.run_id}::{queue.group_id}::"
+                f"{queue.analyst_id}"
+            ),
+        ):
+            st.session_state[
+                selection_state_key
+            ] = next_node_id
+            st.rerun()
+
+    selected_filter = st.radio(
+        "Review filter",
+        options=(
+            "All",
+            "Unreviewed",
+            "Suspicious",
+            "Non-suspicious",
+            "Disagreed",
+        ),
+        horizontal=False,
+        key=(
+            "decision-review-filter::"
+            f"{queue.run_id}::{queue.group_id}::"
+            f"{queue.analyst_id}"
+        ),
+    )
+
+    filtered = _review_filter_rows(
+        queue,
+        selected_filter,
+    )
+
+    if filtered.empty:
+        st.info(
+            "No decisions match the selected review filter."
+        )
+        return
+
+    st.caption(
+        "○ unreviewed · ✓ agreed · ! disagreed"
+    )
+
+    for row in filtered.itertuples(index=False):
+        node_id = str(row.node_id)
+        is_selected = node_id == selected_node_id
+        if st.button(
+            _review_queue_button_label(row),
+            type=(
+                "primary"
+                if is_selected
+                else "secondary"
+            ),
+            use_container_width=True,
+            key=(
+                "decision-review-row::"
+                f"{queue.run_id}::{queue.group_id}::"
+                f"{queue.analyst_id}::{node_id}"
+            ),
+            help=(
+                f"{_humanize(row.review_status)} · "
+                f"{_humanize(row.evidence_status)}"
+            ),
+        ):
+            st.session_state[
+                selection_state_key
+            ] = node_id
+            st.rerun()
 
 def _render_selected_node(
     *,
@@ -574,6 +854,7 @@ def _render_selected_node(
     feedback_store: CsvAnalystFeedbackStore,
     run_id: str,
     group_id: str,
+    analyst_id: str,
 ) -> None:
     """Render a focused investigation outcome card."""
     label = (
@@ -734,6 +1015,7 @@ def _render_selected_node(
         feedback_store=feedback_store,
         run_id=run_id,
         group_id=group_id,
+        analyst_id=analyst_id,
     )
 
 
@@ -742,6 +1024,7 @@ def main() -> None:
     _inject_styles()
 
     state_directory = resolve_state_directory()
+    analyst_id = _analyst_id()
 
     try:
         feedback_store = CsvAnalystFeedbackStore(
@@ -830,8 +1113,16 @@ def main() -> None:
                 investigation.nodes
             )
         )
+        review_queue = build_analyst_review_queue(
+            run_id=run_id,
+            group_id=group_id,
+            nodes=investigation.nodes,
+            feedback=feedback_store.load(),
+            analyst_id=analyst_id,
+        )
     except (
         AnalystApplicationStateError,
+        AnalystFeedbackError,
         ConsolidatedStateError,
         FileNotFoundError,
         ValueError,
@@ -907,24 +1198,46 @@ def main() -> None:
         investigation.collapsed_customer_count,
     )
 
-    st.markdown("")
-    graph_column, decision_column = st.columns(
-        [2.15, 1],
-        gap="large",
-    )
-
     selection_state_key = (
         f"selected-investigation-node::"
         f"{run_id}::{group_id}"
     )
 
+    available_node_ids = set(
+        investigation.nodes["node_id"]
+        .astype("string")
+        .str.strip()
+    )
+    selected_node_id = str(
+        st.session_state.get(
+            selection_state_key,
+            graph.seed_node_ids[0],
+        )
+    )
+
+    if selected_node_id not in available_node_ids:
+        selected_node_id = graph.seed_node_ids[0]
+        st.session_state[
+            selection_state_key
+        ] = selected_node_id
+
+    st.markdown("")
+    queue_column, graph_column, decision_column = (
+        st.columns(
+            [1.05, 2.1, 1.15],
+            gap="large",
+        )
+    )
+
+    # Render the graph first so a graph click updates the
+    # shared selected-node state before the queue and detail
+    # panels are rendered on the next pass.
     with graph_column:
         st.subheader("Investigation path")
         st.caption(
-            "AI-approved expansion paths, "
-            "deterministic identity links, and "
-            "explicit stopping points are shown. "
-            "Click a node to review its outcome."
+            "Click any node to inspect its outcome. "
+            "Suspicious paths continue; non-suspicious "
+            "paths stop."
         )
         _render_legend()
 
@@ -950,27 +1263,31 @@ def main() -> None:
             )
         )
 
-        if clicked_node_id:
+        if (
+            clicked_node_id
+            and clicked_node_id != selected_node_id
+        ):
             st.session_state[
                 selection_state_key
             ] = clicked_node_id
+            st.rerun()
 
-    selected_node_id = st.session_state.get(
-        selection_state_key,
-        graph.seed_node_ids[0],
+    selected_node_id = str(
+        st.session_state.get(
+            selection_state_key,
+            graph.seed_node_ids[0],
+        )
     )
 
-    available_node_ids = set(
-        investigation.nodes["node_id"]
-        .astype("string")
-        .str.strip()
-    )
-
-    if selected_node_id not in available_node_ids:
-        selected_node_id = graph.seed_node_ids[0]
-        st.session_state[
-            selection_state_key
-        ] = selected_node_id
+    with queue_column:
+        with st.container(border=True):
+            _render_decision_review_queue(
+                queue=review_queue,
+                selection_state_key=(
+                    selection_state_key
+                ),
+                selected_node_id=selected_node_id,
+            )
 
     selected_node = (
         investigation.nodes.loc[
@@ -990,6 +1307,7 @@ def main() -> None:
                 feedback_store=feedback_store,
                 run_id=run_id,
                 group_id=group_id,
+                analyst_id=analyst_id,
             )
 
 
