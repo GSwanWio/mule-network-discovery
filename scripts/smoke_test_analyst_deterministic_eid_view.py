@@ -14,6 +14,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+from network_mule_discovery.analyst_investigation_graph import (
+    build_analyst_investigation_graph,
+)
 from network_mule_discovery.analyst_investigation_view import (
     AI_CALL_REQUIRED_COLUMNS,
     DECISION_REQUIRED_COLUMNS,
@@ -93,6 +96,15 @@ def main() -> None:
         view.nodes["node_id"].eq("N_LINKED")
     ].iloc[0]
 
+    graph = build_analyst_investigation_graph(
+        view.nodes
+    )
+    graph_nodes = {
+        item["data"]["id"]: item["data"]
+        for item in graph.elements["nodes"]
+    }
+    graph_edges = graph.elements["edges"]
+
     assert view.investigation_status == (
         "DETERMINISTIC_REVIEW_COMPLETE"
     )
@@ -125,6 +137,19 @@ def main() -> None:
     assert linked["discovered_via"] == (
         "Same Emirates ID"
     )
+    assert (
+        graph_nodes["N_SEED"]["label"]
+        == "SEED_CUSTOMER"
+    )
+    assert (
+        graph_nodes["N_LINKED"]["label"]
+        == "DETERMINISTIC_CUSTOMER"
+    )
+    assert len(graph_edges) == 1
+    assert (
+        graph_edges[0]["data"]["label"]
+        == "DETERMINISTIC_PATH"
+    )
 
     print(
         "Deterministic EID analyst-view "
@@ -136,6 +161,9 @@ def main() -> None:
     )
     print("Deterministic linked nodes: 1")
     print("Pending AI nodes: 0")
+    print(
+        "Deterministic graph styling: passed"
+    )
     print("External live API calls made: 0")
 
 
