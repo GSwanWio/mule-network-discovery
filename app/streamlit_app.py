@@ -338,6 +338,12 @@ def _status_presentation(
             "mule-status-complete",
         )
 
+    if normalized == "DETERMINISTIC_REVIEW_COMPLETE":
+        return (
+            "Deterministic review complete",
+            "mule-status-complete",
+        )
+
     if normalized == "NEEDS_ATTENTION":
         return (
             "Needs attention",
