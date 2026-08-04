@@ -114,6 +114,8 @@ def _style_label(
 
     if normalized_category == "SEED":
         return "SEED_CUSTOMER"
+    if normalized_category == "DETERMINISTIC":
+        return "DETERMINISTIC_CUSTOMER"
 
     if normalized_category == "CONTINUE":
         if normalized_type == "CUSTOMER":
@@ -141,6 +143,9 @@ def _edge_style_label(
 
     if normalized == "STOP":
         return "STOPPED_PATH"
+
+    if normalized == "DETERMINISTIC":
+        return "DETERMINISTIC_PATH"
 
     if normalized in {
         "FAILED",
