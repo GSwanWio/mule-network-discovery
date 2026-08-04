@@ -392,6 +392,16 @@ def analyst_node_styles() -> list[NodeStyle]:
             },
         ),
         NodeStyle(
+            "DETERMINISTIC_CUSTOMER",
+            "#0F766E",
+            "_caption",
+            custom_styles={
+                **common,
+                "shape": "round-rectangle",
+                "border-color": "#134E4A",
+            },
+        ),
+        NodeStyle(
             "EXPANDED_CUSTOMER",
             "#DC2626",
             "_caption",
@@ -472,6 +482,17 @@ def analyst_edge_styles() -> list[EdgeStyle]:
         EdgeStyle(
             "EXPANDED_PATH",
             "#475569",
+            "_caption",
+            directed=True,
+            curve_style="bezier",
+            custom_styles={
+                **common,
+                "line-style": "solid",
+            },
+        ),
+        EdgeStyle(
+            "DETERMINISTIC_PATH",
+            "#0F766E",
             "_caption",
             directed=True,
             curve_style="bezier",

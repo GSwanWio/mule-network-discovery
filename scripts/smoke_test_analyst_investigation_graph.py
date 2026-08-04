@@ -216,6 +216,7 @@ def main() -> None:
         for style in analyst_node_styles()
     } == {
         "node[label='SEED_CUSTOMER']",
+        "node[label='DETERMINISTIC_CUSTOMER']",
         "node[label='EXPANDED_CUSTOMER']",
         "node[label='EXPANDED_COUNTERPARTY']",
         "node[label='STOPPED_CUSTOMER']",
@@ -224,7 +225,7 @@ def main() -> None:
         "node[label='FAILED_NODE']",
     }
 
-    assert len(analyst_edge_styles()) == 3
+    assert len(analyst_edge_styles()) == 4
     assert NODE_SELECTED_EVENT.dump() == {
         "name": "investigation_node_selected",
         "event_type": "tap",
