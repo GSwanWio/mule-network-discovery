@@ -1031,21 +1031,66 @@ def _render_selected_node(
             "investigation and forms depth zero."
         )
     elif decision_category == "DETERMINISTIC":
-        st.markdown("#### Deterministic relationship")
+        st.markdown("#### Final determination")
         st.write(
-            expansion_outcome
-            or (
-                "The customer was included through "
-                "a deterministic identity link."
-            )
+            "This customer is determined to be a mule "
+            "because the customer shares the same valid "
+            "Emirates ID as the confirmed mule seed."
         )
 
-        st.markdown("#### Why no AI decision was required")
+        st.markdown("#### Behavioral assessment")
+        behavioral_decision = _clean_text(
+            node.get("behavioral_decision")
+        ).upper()
+        behavioral_label = _clean_text(
+            node.get("behavioral_decision_label")
+        )
+        behavioral_rationale = _clean_text(
+            node.get("rationale")
+        )
+        behavioral_evidence = strongest_evidence_items(
+            node.get("key_evidence")
+        )
+
+        if behavioral_decision not in {
+            "",
+            "NOT_ASSESSED",
+            "PENDING",
+        }:
+            st.write(
+                "AI behavioral outcome: "
+                f"{behavioral_label or _humanize(behavioral_decision)}."
+            )
+
+            if behavioral_rationale:
+                st.write(behavioral_rationale)
+
+            if behavioral_evidence:
+                st.markdown(
+                    "\n".join(
+                        f"- {item}"
+                        for item in behavioral_evidence
+                    )
+                )
+
+            st.caption(
+                "The behavioral assessment describes observed "
+                "activity only and does not override the final "
+                "identity-based determination."
+            )
+        else:
+            st.write(
+                "No separate AI behavioral assessment was "
+                "required for this deterministic "
+                "identity-linked customer."
+            )
+
+        st.markdown("#### Deterministic basis")
         st.write(
-            "The customer shares the same valid "
-            "Emirates ID as the confirmed seed. "
-            "This relationship is included directly "
-            "under the EID-linking contract."
+            "The customer shares the same valid Emirates ID "
+            "as the confirmed mule seed. Under the EID-linking "
+            "contract, that direct identity relationship takes "
+            "precedence over any behavioral assessment."
         )
     else:
         st.markdown("#### AI outcome")

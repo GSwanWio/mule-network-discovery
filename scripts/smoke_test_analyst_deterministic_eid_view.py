@@ -124,13 +124,26 @@ def main() -> None:
         == "DETERMINISTIC_EID_LINK"
     )
     assert (
+        linked["behavioral_decision"]
+        == "NOT_ASSESSED"
+    )
+    assert (
+        linked["behavioral_decision_label"]
+        == "Not assessed"
+    )
+    assert linked["final_decision"] == "MULE"
+    assert (
+        linked["final_decision_basis"]
+        == "DIRECT_EMIRATES_ID_LINK"
+    )
+    assert (
         linked["decision_label"]
-        == "Deterministic EID link"
+        == "Mule — direct Emirates ID link"
     )
     assert (
         linked["expansion_outcome"]
         == (
-            "Included — deterministic "
+            "Final determination — mule due to direct "
             "Emirates ID link"
         )
     )
@@ -144,6 +157,10 @@ def main() -> None:
     assert (
         graph_nodes["N_LINKED"]["label"]
         == "DETERMINISTIC_CUSTOMER"
+    )
+    assert (
+        graph_nodes["N_LINKED"]["_caption"]
+        == "Mule — same Emirates ID\nEID-linked customer"
     )
     assert len(graph_edges) == 1
     assert (
@@ -161,6 +178,12 @@ def main() -> None:
     )
     print("Deterministic linked nodes: 1")
     print("Pending AI nodes: 0")
+    print(
+        "Deterministic final mule precedence: passed"
+    )
+    print(
+        "Behavioral assessment separated: passed"
+    )
     print(
         "Deterministic graph styling: passed"
     )

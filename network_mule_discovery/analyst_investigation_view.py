@@ -371,7 +371,10 @@ def _decision_presentation(
     ):
         return (
             "DETERMINISTIC",
-            "Included — deterministic Emirates ID link",
+            (
+                "Final determination — mule due to direct "
+                "Emirates ID link"
+            ),
         )
 
     if "FAILED_CLOSED" in combined_status:
@@ -690,11 +693,51 @@ def build_analyst_investigation_view(
                         else "PENDING"
                     )
                 ),
+                "behavioral_decision": (
+                    decision
+                    if decision
+                    else (
+                        "NOT_ASSESSED"
+                        if decision_category == "DETERMINISTIC"
+                        else "PENDING"
+                    )
+                ),
+                "behavioral_decision_label": (
+                    _humanize(decision)
+                    if decision
+                    else (
+                        "Not assessed"
+                        if decision_category == "DETERMINISTIC"
+                        else "Pending"
+                    )
+                ),
+                "final_decision": (
+                    "MULE"
+                    if decision_category == "DETERMINISTIC"
+                    else (
+                        "SEED_CONFIRMED"
+                        if seed_flag
+                        else (
+                            decision
+                            if decision
+                            else "PENDING"
+                        )
+                    )
+                ),
+                "final_decision_basis": (
+                    "DIRECT_EMIRATES_ID_LINK"
+                    if decision_category == "DETERMINISTIC"
+                    else (
+                        "SEED"
+                        if seed_flag
+                        else "AI_ASSESSMENT"
+                    )
+                ),
                 "decision_label": (
                     "Confirmed seed"
                     if seed_flag
                     else (
-                        "Deterministic EID link"
+                        "Mule — direct Emirates ID link"
                         if decision_category == "DETERMINISTIC"
                         else _humanize(
                             decision
