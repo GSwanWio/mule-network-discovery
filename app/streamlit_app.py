@@ -42,6 +42,10 @@ from network_mule_discovery.analyst_investigation_graph import (
 from network_mule_discovery.analyst_investigation_view import (
     build_analyst_investigation_view,
 )
+from network_mule_discovery.analyst_network_narrative import (
+    AnalystNetworkNarrative,
+    build_analyst_network_narrative,
+)
 from network_mule_discovery.analyst_review_queue import (
     AnalystReviewQueue,
     build_analyst_review_queue,
@@ -280,6 +284,33 @@ def _inject_styles() -> None:
 
         .mule-dot-exposed-customer {
             background: #D97706;
+        }
+
+        .mule-network-narrative {
+            background: linear-gradient(
+                135deg,
+                #F8FAFC 0%,
+                #FFFFFF 100%
+            );
+            border: 1px solid #CBD5E1;
+            border-radius: 14px;
+            margin-top: 1rem;
+            padding: 1rem 1.2rem;
+        }
+
+        .mule-network-narrative-title {
+            color: #0F172A;
+            font-size: 1.18rem;
+            font-weight: 750;
+            line-height: 1.35;
+            margin: 0.15rem 0 0.8rem 0;
+        }
+
+        .mule-network-narrative p {
+            color: #334155;
+            font-size: 0.92rem;
+            line-height: 1.55;
+            margin: 0.55rem 0;
         }
 
         .mule-review-stats {
@@ -1084,6 +1115,35 @@ def _render_selected_node(
     )
 
 
+def _render_network_narrative(
+    narrative: AnalystNetworkNarrative,
+) -> None:
+    """Render one analyst-facing summary of the network."""
+    paragraphs = "".join(
+        (
+            "<p>"
+            f"{html.escape(paragraph)}"
+            "</p>"
+        )
+        for paragraph in narrative.paragraphs
+    )
+
+    st.markdown(
+        (
+            '<section class="mule-network-narrative">'
+            '<div class="mule-kicker">'
+            "Network summary"
+            "</div>"
+            '<div class="mule-network-narrative-title">'
+            f"{html.escape(narrative.headline)}"
+            "</div>"
+            f"{paragraphs}"
+            "</section>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def main() -> None:
     """Render the analyst-first investigation application."""
     _inject_styles()
@@ -1173,6 +1233,9 @@ def main() -> None:
                 ),
             )
         )
+        narrative = build_analyst_network_narrative(
+            investigation
+        )
         graph = (
             build_analyst_investigation_graph(
                 investigation.nodes
@@ -1236,32 +1299,7 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    metric_columns = st.columns(6)
-
-    metric_columns[0].metric(
-        "Journey depth",
-        investigation.max_depth,
-    )
-    metric_columns[1].metric(
-        "AI expanded",
-        investigation.expanded_node_count,
-    )
-    metric_columns[2].metric(
-        "AI stopped",
-        investigation.stopped_node_count,
-    )
-    metric_columns[3].metric(
-        "Deterministic links",
-        investigation.deterministic_node_count,
-    )
-    metric_columns[4].metric(
-        "Awaiting AI",
-        investigation.pending_node_count,
-    )
-    metric_columns[5].metric(
-        "Customers summarized",
-        investigation.collapsed_customer_count,
-    )
+    _render_network_narrative(narrative)
 
     selection_state_key = (
         f"selected-investigation-node::"
