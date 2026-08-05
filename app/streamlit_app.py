@@ -22,6 +22,9 @@ from network_mule_discovery.analyst_application_state import (
     AnalystApplicationStateError,
     AnalystApplicationStateStore,
 )
+from network_mule_discovery.analyst_evidence_presentation import (
+    strongest_evidence_items,
+)
 from network_mule_discovery.analyst_feedback import (
     AnalystFeedbackError,
     CsvAnalystFeedbackStore,
@@ -1061,12 +1064,17 @@ def _render_selected_node(
         )
 
         st.markdown("#### Strongest evidence")
-        key_evidence = _clean_text(
+        evidence_items = strongest_evidence_items(
             node.get("key_evidence")
         )
 
-        if key_evidence:
-            st.markdown(key_evidence)
+        if evidence_items:
+            st.markdown(
+                "\n".join(
+                    f"- {item}"
+                    for item in evidence_items
+                )
+            )
         else:
             st.caption(
                 "No summarized AI evidence is "
