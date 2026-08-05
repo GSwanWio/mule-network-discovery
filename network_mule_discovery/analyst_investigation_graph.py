@@ -114,6 +114,8 @@ def _style_label(
 
     if normalized_category == "SEED":
         return "SEED_CUSTOMER"
+    if normalized_category == "DETERMINISTIC":
+        return "DETERMINISTIC_CUSTOMER"
 
     if normalized_category == "CONTINUE":
         if normalized_type == "CUSTOMER":
@@ -133,14 +135,52 @@ def _style_label(
     return "PENDING_NODE"
 
 
+def _outcome_caption(
+    *,
+    node_type: str,
+    decision_category: str,
+) -> str:
+    """Return one concise analyst-facing node outcome."""
+    normalized_type = node_type.upper()
+    normalized_category = decision_category.upper()
+
+    if normalized_category == "SEED":
+        return "Confirmed seed"
+    if normalized_category == "DETERMINISTIC":
+        return "Mule — same Emirates ID"
+    if normalized_category == "CONTINUE":
+        if normalized_type == "CUSTOMER":
+            return "Likely mule"
+
+        return "Suspicious counterparty"
+    if normalized_category == "STOP":
+        if normalized_type == "CUSTOMER":
+            return "Non-suspicious customer"
+
+        return "Legitimate counterparty"
+    if normalized_category == "FAILED":
+        return "Decision unavailable"
+
+    return "Awaiting review"
+
+
 def _edge_style_label(
+    *,
+    node_type: str,
     decision_category: str,
 ) -> str:
     """Return the visual category for one journey edge."""
+    normalized_type = node_type.upper()
     normalized = decision_category.upper()
 
     if normalized == "STOP":
-        return "STOPPED_PATH"
+        if normalized_type == "CUSTOMER":
+            return "STOPPED_CUSTOMER_PATH"
+
+        return "STOPPED_COUNTERPARTY_PATH"
+
+    if normalized == "DETERMINISTIC":
+        return "DETERMINISTIC_PATH"
 
     if normalized in {
         "FAILED",
@@ -217,18 +257,12 @@ def build_analyst_investigation_graph(
         )
 
         caption_lines = [
-            display_label,
-            (
-                f"{_clean_text(row.depth_label)} · "
-                f"{_clean_text(row.expansion_outcome)}"
+            _outcome_caption(
+                node_type=node_type,
+                decision_category=decision_category,
             ),
+            display_label,
         ]
-
-        if collapsed_count > 0:
-            caption_lines.append(
-                f"{collapsed_count} linked customers — "
-                "expansion stopped"
-            )
 
         graph_nodes.append(
             {
@@ -306,7 +340,10 @@ def build_analyst_investigation_graph(
                         f"{parent_node_id}|{node_id}"
                     ),
                     "label": _edge_style_label(
-                        decision_category
+                        node_type=node_type,
+                        decision_category=(
+                            decision_category
+                        ),
                     ),
                     "source": parent_node_id,
                     "target": node_id,
@@ -363,10 +400,10 @@ def build_analyst_investigation_graph(
 def analyst_node_styles() -> list[NodeStyle]:
     """Return the semantic analyst node styles."""
     common = {
-        "width": 220,
-        "height": 88,
+        "width": 190,
+        "height": 68,
         "text-wrap": "wrap",
-        "text-max-width": 195,
+        "text-max-width": 170,
         "text-valign": "center",
         "text-halign": "center",
         "font-size": 13,
@@ -387,6 +424,16 @@ def analyst_node_styles() -> list[NodeStyle]:
             },
         ),
         NodeStyle(
+            "DETERMINISTIC_CUSTOMER",
+            "#DC2626",
+            "_caption",
+            custom_styles={
+                **common,
+                "shape": "round-rectangle",
+                "border-color": "#7F1D1D",
+            },
+        ),
+        NodeStyle(
             "EXPANDED_CUSTOMER",
             "#DC2626",
             "_caption",
@@ -398,33 +445,32 @@ def analyst_node_styles() -> list[NodeStyle]:
         ),
         NodeStyle(
             "EXPANDED_COUNTERPARTY",
-            "#F97316",
+            "#DC2626",
             "_caption",
             custom_styles={
                 **common,
                 "shape": "ellipse",
-                "border-color": "#9A3412",
+                "border-color": "#7F1D1D",
             },
         ),
         NodeStyle(
             "STOPPED_CUSTOMER",
-            "#64748B",
+            "#D97706",
             "_caption",
             custom_styles={
                 **common,
                 "shape": "round-rectangle",
-                "border-color": "#334155",
+                "border-color": "#92400E",
             },
         ),
         NodeStyle(
             "STOPPED_COUNTERPARTY",
-            "#64748B",
+            "#16A34A",
             "_caption",
             custom_styles={
                 **common,
                 "shape": "ellipse",
-                "border-color": "#334155",
-                "border-style": "dashed",
+                "border-color": "#166534",
             },
         ),
         NodeStyle(
@@ -466,7 +512,7 @@ def analyst_edge_styles() -> list[EdgeStyle]:
     return [
         EdgeStyle(
             "EXPANDED_PATH",
-            "#475569",
+            "#DC2626",
             "_caption",
             directed=True,
             curve_style="bezier",
@@ -476,14 +522,36 @@ def analyst_edge_styles() -> list[EdgeStyle]:
             },
         ),
         EdgeStyle(
-            "STOPPED_PATH",
-            "#94A3B8",
+            "DETERMINISTIC_PATH",
+            "#DC2626",
             "_caption",
             directed=True,
             curve_style="bezier",
             custom_styles={
                 **common,
-                "line-style": "dashed",
+                "line-style": "solid",
+            },
+        ),
+        EdgeStyle(
+            "STOPPED_CUSTOMER_PATH",
+            "#D97706",
+            "_caption",
+            directed=True,
+            curve_style="bezier",
+            custom_styles={
+                **common,
+                "line-style": "solid",
+            },
+        ),
+        EdgeStyle(
+            "STOPPED_COUNTERPARTY_PATH",
+            "#16A34A",
+            "_caption",
+            directed=True,
+            curve_style="bezier",
+            custom_styles={
+                **common,
+                "line-style": "solid",
             },
         ),
         EdgeStyle(

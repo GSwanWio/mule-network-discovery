@@ -119,6 +119,7 @@ class AnalystInvestigationView:
     seed_count: int
     expanded_node_count: int
     stopped_node_count: int
+    deterministic_node_count: int
     pending_node_count: int
     failed_node_count: int
     collapsed_customer_count: int
@@ -363,6 +364,18 @@ def _decision_presentation(
     combined_status = (
         f"{node_status}|{assessment_status}"
     ).upper()
+
+    if (
+        "INCLUDED_DETERMINISTIC" in combined_status
+        and "NOT_APPLICABLE" in combined_status
+    ):
+        return (
+            "DETERMINISTIC",
+            (
+                "Final determination — mule due to direct "
+                "Emirates ID link"
+            ),
+        )
 
     if "FAILED_CLOSED" in combined_status:
         return "FAILED", "Stopped — AI decision unavailable"
@@ -672,17 +685,65 @@ def build_analyst_investigation_view(
                 ),
                 "is_seed": seed_flag,
                 "ai_decision": (
+                    "DETERMINISTIC_EID_LINK"
+                    if decision_category == "DETERMINISTIC"
+                    else (
+                        decision
+                        if decision
+                        else "PENDING"
+                    )
+                ),
+                "behavioral_decision": (
                     decision
                     if decision
-                    else "PENDING"
+                    else (
+                        "NOT_ASSESSED"
+                        if decision_category == "DETERMINISTIC"
+                        else "PENDING"
+                    )
+                ),
+                "behavioral_decision_label": (
+                    _humanize(decision)
+                    if decision
+                    else (
+                        "Not assessed"
+                        if decision_category == "DETERMINISTIC"
+                        else "Pending"
+                    )
+                ),
+                "final_decision": (
+                    "MULE"
+                    if decision_category == "DETERMINISTIC"
+                    else (
+                        "SEED_CONFIRMED"
+                        if seed_flag
+                        else (
+                            decision
+                            if decision
+                            else "PENDING"
+                        )
+                    )
+                ),
+                "final_decision_basis": (
+                    "DIRECT_EMIRATES_ID_LINK"
+                    if decision_category == "DETERMINISTIC"
+                    else (
+                        "SEED"
+                        if seed_flag
+                        else "AI_ASSESSMENT"
+                    )
                 ),
                 "decision_label": (
                     "Confirmed seed"
                     if seed_flag
-                    else _humanize(
-                        decision
-                        if decision
-                        else "Pending"
+                    else (
+                        "Mule — direct Emirates ID link"
+                        if decision_category == "DETERMINISTIC"
+                        else _humanize(
+                            decision
+                            if decision
+                            else "Pending"
+                        )
                     )
                 ),
                 "decision_category": (
@@ -783,6 +844,9 @@ def build_analyst_investigation_view(
     failed_count = int(
         category_counts.get("FAILED", 0)
     )
+    deterministic_count = int(
+        category_counts.get("DETERMINISTIC", 0)
+    )
     pending_count = int(
         category_counts.get("PENDING", 0)
     )
@@ -791,6 +855,14 @@ def build_analyst_investigation_view(
         investigation_status = "NEEDS_ATTENTION"
     elif pending_count:
         investigation_status = "IN_PROGRESS"
+    elif (
+        deterministic_count
+        and not latest_decisions
+        and not latest_ai_calls
+    ):
+        investigation_status = (
+            "DETERMINISTIC_REVIEW_COMPLETE"
+        )
     else:
         investigation_status = "AI_REVIEW_COMPLETE"
 
@@ -817,6 +889,9 @@ def build_analyst_investigation_view(
         ),
         stopped_node_count=int(
             category_counts.get("STOP", 0)
+        ),
+        deterministic_node_count=(
+            deterministic_count
         ),
         pending_node_count=pending_count,
         failed_node_count=failed_count,
