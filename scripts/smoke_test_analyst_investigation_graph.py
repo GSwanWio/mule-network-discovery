@@ -130,6 +130,32 @@ def main() -> None:
                 ),
                 "collapsed_customer_count": 500,
             },
+            {
+                "node_id": "N_CUSTOMER_STOP",
+                "node_type": "CUSTOMER",
+                "display_label": "Potential victim",
+                "depth": 3,
+                "depth_label": "Depth 3",
+                "parent_node_id": "N_MULE",
+                "discovered_via": (
+                    "Shared suspicious counterparty"
+                ),
+                "is_seed": False,
+                "ai_decision": "LOW_CONCERN",
+                "decision_label": "Low Concern",
+                "decision_category": "STOP",
+                "expansion_outcome": (
+                    "Stopped — low-concern customer"
+                ),
+                "confidence": "0.81",
+                "rationale": (
+                    "No reasonable mule behaviour identified."
+                ),
+                "key_evidence": (
+                    "• Customer may be exposed rather than complicit"
+                ),
+                "collapsed_customer_count": 0,
+            },
         ]
     )
 
@@ -146,8 +172,8 @@ def main() -> None:
     assert graph.layout["name"] == "breadthfirst"
     assert graph.layout["directed"] is True
     assert graph.seed_node_ids == ("N_SEED",)
-    assert len(graph.elements["nodes"]) == 4
-    assert len(graph.elements["edges"]) == 3
+    assert len(graph.elements["nodes"]) == 5
+    assert len(graph.elements["edges"]) == 4
 
     assert all(
         node["selectable"] is False
@@ -193,8 +219,29 @@ def main() -> None:
         == "STOPPED_COUNTERPARTY"
     )
     assert (
-        "500 linked customers — expansion stopped"
-        in node_by_id["N_STOP"]["_caption"]
+        node_by_id["N_CUSTOMER_STOP"]["label"]
+        == "STOPPED_CUSTOMER"
+    )
+    assert node_by_id["N_SEED"]["_caption"] == (
+        "Confirmed seed\nSeed customer"
+    )
+    assert node_by_id["N_CP"]["_caption"] == (
+        "Suspicious counterparty\n"
+        "Suspicious counterparty"
+    )
+    assert node_by_id["N_MULE"]["_caption"] == (
+        "Likely mule\nDiscovered mule"
+    )
+    assert node_by_id["N_STOP"]["_caption"] == (
+        "Legitimate counterparty\nUtility provider"
+    )
+    assert node_by_id["N_CUSTOMER_STOP"]["_caption"] == (
+        "Non-suspicious customer\nPotential victim"
+    )
+    assert "Depth" not in node_by_id["N_CP"]["_caption"]
+    assert "Expanded" not in node_by_id["N_CP"]["_caption"]
+    assert "500 linked customers" not in (
+        node_by_id["N_STOP"]["_caption"]
     )
 
     edge_pairs = {
@@ -209,7 +256,21 @@ def main() -> None:
         ("N_SEED", "N_CP"),
         ("N_CP", "N_MULE"),
         ("N_MULE", "N_STOP"),
+        ("N_MULE", "N_CUSTOMER_STOP"),
     }
+
+    edge_by_target = {
+        item["data"]["target"]: item["data"]
+        for item in graph.elements["edges"]
+    }
+    assert (
+        edge_by_target["N_STOP"]["label"]
+        == "STOPPED_COUNTERPARTY_PATH"
+    )
+    assert (
+        edge_by_target["N_CUSTOMER_STOP"]["label"]
+        == "STOPPED_CUSTOMER_PATH"
+    )
 
     assert {
         style.dump()["selector"]
@@ -225,7 +286,7 @@ def main() -> None:
         "node[label='FAILED_NODE']",
     }
 
-    assert len(analyst_edge_styles()) == 4
+    assert len(analyst_edge_styles()) == 5
     assert NODE_SELECTED_EVENT.dump() == {
         "name": "investigation_node_selected",
         "event_type": "tap",
@@ -266,12 +327,15 @@ def main() -> None:
         "smoke test passed."
     )
     print("Layout: breadth-first")
-    print("Visible journey nodes: 4")
-    print("Visible journey edges: 3")
+    print("Visible journey nodes: 5")
+    print("Visible journey edges: 4")
     print("Node click event: passed")
     print("Built-in selection disabled: passed")
     print("Technical inspector opened: no")
-    print("Collapsed branch display: passed")
+    print("Concise node labels: passed")
+    print("Suspicious paths: red")
+    print("Legitimate counterparty paths: green")
+    print("Non-suspicious customer paths: amber")
     print("Full audit graph exposed: no")
     print("External live API calls made: 0")
 

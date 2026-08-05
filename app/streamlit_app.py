@@ -209,18 +209,28 @@ def _inject_styles() -> None:
         }
 
         .mule-decision-DETERMINISTIC {
-            background: #CCFBF1;
-            color: #115E59;
+            background: #FEE2E2;
+            color: #991B1B;
         }
 
         .mule-decision-CONTINUE {
-            background: #FFEDD5;
-            color: #9A3412;
+            background: #FEE2E2;
+            color: #991B1B;
         }
 
         .mule-decision-STOP {
-            background: #E2E8F0;
-            color: #334155;
+            background: #DCFCE7;
+            color: #166534;
+        }
+
+        .mule-decision-STOP-CUSTOMER {
+            background: #FEF3C7;
+            color: #92400E;
+        }
+
+        .mule-decision-STOP-COUNTERPARTY {
+            background: #DCFCE7;
+            color: #166534;
         }
 
         .mule-decision-PENDING {
@@ -260,20 +270,50 @@ def _inject_styles() -> None:
             background: #2563EB;
         }
 
-        .mule-dot-deterministic {
-            background: #0F766E;
-        }
-
-        .mule-dot-customer {
+        .mule-dot-suspicious {
             background: #DC2626;
         }
 
-        .mule-dot-counterparty {
-            background: #F97316;
+        .mule-dot-legitimate {
+            background: #16A34A;
         }
 
-        .mule-dot-stop {
-            background: #64748B;
+        .mule-dot-exposed-customer {
+            background: #D97706;
+        }
+
+        .mule-review-stats {
+            display: grid;
+            gap: 0.45rem;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            margin: 0.8rem 0 0.9rem 0;
+        }
+
+        .mule-review-stat {
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            min-width: 0;
+            padding: 0.65rem 0.25rem;
+            text-align: center;
+        }
+
+        .mule-review-stat-value {
+            color: #0F172A;
+            font-size: 1.7rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .mule-review-stat-label {
+            color: #64748B;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            line-height: 1.2;
+            margin-top: 0.35rem;
+            overflow-wrap: anywhere;
+            text-transform: uppercase;
         }
         </style>
         """,
@@ -390,20 +430,16 @@ def _render_legend() -> None:
                 Confirmed seed
             </span>
             <span class="mule-legend-item">
-                <span class="mule-dot mule-dot-deterministic"></span>
-                Deterministic EID link
+                <span class="mule-dot mule-dot-suspicious"></span>
+                Suspicious or mule
             </span>
             <span class="mule-legend-item">
-                <span class="mule-dot mule-dot-counterparty"></span>
-                AI expanded counterparty
+                <span class="mule-dot mule-dot-legitimate"></span>
+                Legitimate counterparty
             </span>
             <span class="mule-legend-item">
-                <span class="mule-dot mule-dot-customer"></span>
-                AI expanded customer
-            </span>
-            <span class="mule-legend-item">
-                <span class="mule-dot mule-dot-stop"></span>
-                Expansion stopped
+                <span class="mule-dot mule-dot-exposed-customer"></span>
+                Non-mule customer / potential victim
             </span>
         </div>
         """,
@@ -711,11 +747,16 @@ def _review_queue_button_label(
         "REVIEWED_CORRECT": "✓",
         "REVIEWED_INCORRECT": "!",
     }.get(review_status, "○")
-    outcome_icon = (
-        "🔴"
-        if review_outcome == "SUSPICIOUS"
-        else "🟢"
-    )
+    subject_type = _clean_text(
+        getattr(row, "subject_type", "")
+    ).upper()
+
+    if review_outcome == "SUSPICIOUS":
+        outcome_icon = "🔴"
+    elif subject_type == "CUSTOMER":
+        outcome_icon = "🟠"
+    else:
+        outcome_icon = "🟢"
 
     display_label = _clean_text(
         getattr(row, "display_label", "")
@@ -743,18 +784,36 @@ def _render_decision_review_queue(
         "evidence panel use the same selected node."
     )
 
-    progress_columns = st.columns(3)
-    progress_columns[0].metric(
-        "Reviewed",
-        queue.reviewed_count,
-    )
-    progress_columns[1].metric(
-        "Remaining",
-        queue.unreviewed_count,
-    )
-    progress_columns[2].metric(
-        "Disagreed",
-        queue.incorrect_count,
+    st.markdown(
+        (
+            '<div class="mule-review-stats">'
+            '<div class="mule-review-stat">'
+            '<div class="mule-review-stat-value">'
+            f"{queue.reviewed_count}"
+            "</div>"
+            '<div class="mule-review-stat-label">'
+            "Reviewed"
+            "</div>"
+            "</div>"
+            '<div class="mule-review-stat">'
+            '<div class="mule-review-stat-value">'
+            f"{queue.unreviewed_count}"
+            "</div>"
+            '<div class="mule-review-stat-label">'
+            "Remaining"
+            "</div>"
+            "</div>"
+            '<div class="mule-review-stat">'
+            '<div class="mule-review-stat-value">'
+            f"{queue.incorrect_count}"
+            "</div>"
+            '<div class="mule-review-stat-label">'
+            "Disagreed"
+            "</div>"
+            "</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
     )
 
     st.progress(
@@ -876,6 +935,12 @@ def _render_selected_node(
     decision_label = _clean_text(
         node.get("decision_label")
     )
+    decision_style_category = decision_category
+
+    if decision_category == "STOP":
+        decision_style_category = (
+            f"STOP-{_clean_text(node.get('node_type')).upper()}"
+        )
     expansion_outcome = _clean_text(
         node.get("expansion_outcome")
     )
@@ -897,7 +962,7 @@ def _render_selected_node(
     st.markdown(
         (
             '<span class="mule-decision '
-            f'mule-decision-{decision_category}">'
+            f'mule-decision-{decision_style_category}">'
             f"{escaped_decision}"
             "</span>"
         ),
