@@ -215,7 +215,8 @@ def main() -> None:
                 {
                     "MULE_NETWORK_STATE_DIRECTORY": (
                         str(state_directory)
-                    )
+                    ),
+                    "MULE_ANALYST_ID": "ANALYST_TEST",
                 },
                 clear=False,
             ),
@@ -251,28 +252,39 @@ def main() -> None:
             app.selectbox[0].value
         ).startswith(current_run_id)
 
-        assert len(app.metric) == 5
+        assert len(app.metric) == 0
         assert len(app.dataframe) == 0
         assert len(app.checkbox) == 0
-        assert len(app.radio) == 1
+        assert len(app.radio) == 2
+
+        radios_by_label = {
+            radio.label: radio
+            for radio in app.radio
+        }
+
         assert (
-            app.radio[0].label
-            == "Was the AI decision correct?"
+            radios_by_label["Review filter"].value
+            == "All"
         )
-        assert app.radio[0].value is None
+        assert (
+            radios_by_label[
+                "Was this node decision correct?"
+            ].value
+            is None
+        )
         assert len(app.text_area) == 1
         assert any(
             button.label == "Submit review"
             for button in app.button
         )
         assert any(
-            "Latest analyst review: "
-            "AI marked correct"
+            "Your latest review: "
+            "decision marked correct"
             in message.value
             for message in app.success
         )
 
-        assert graph_component.call_count == 1
+        assert graph_component.call_count == 2
 
         graph_arguments = (
             graph_component.call_args.kwargs
@@ -318,20 +330,20 @@ def main() -> None:
             in app_source
         )
         assert (
-            "Only AI-approved expansion paths"
+            "Suspicious paths continue; non-suspicious "
             in app_source
         )
         assert (
             "CsvAnalystFeedbackStore"
             in app_source
         )
-        assert "AI correct" in app_source
-        assert "AI incorrect" in app_source
+        assert "Decision correct" in app_source
+        assert "Decision incorrect" in app_source
         assert (
-            "AI decision remains"
+            "The persisted node decision "
             in app_source
         )
-        assert "unchanged." in app_source
+        assert "remains unchanged." in app_source
         assert (
             historical_run_id
             != current_run_id
