@@ -306,8 +306,13 @@ def main() -> None:
                 ].eq("DISCOVER_CUSTOMER_RELATIONSHIPS")
             ]
         )
-        assert list(recursive_queue["subject_key"]) == [
-            "RETAIL|R1005"
+        assert sorted(
+            recursive_queue["subject_key"]
+            .astype("string")
+            .tolist()
+        ) == [
+            "RETAIL|R1005",
+            "SME|B2001",
         ]
         assert not controlled_run.final_plan.actionable_queue[
             "action_type"
@@ -319,7 +324,7 @@ def main() -> None:
         assert int(telemetry["max_observed_depth"]) == 4
         assert int(telemetry["total_node_count"]) == 108
         assert int(telemetry["total_edge_count"]) == 109
-        assert int(telemetry["current_frontier_width"]) == 1
+        assert int(telemetry["current_frontier_width"]) == 2
         assert int(telemetry["expansion_source_count"]) == 3
         assert int(telemetry["new_node_count"]) == 0
         assert int(telemetry["new_edge_count"]) == 0
@@ -360,9 +365,14 @@ def main() -> None:
                 )
             ]
         )
-        assert list(
+        assert sorted(
             repeated_recursive_queue["subject_key"]
-        ) == ["RETAIL|R1005"]
+            .astype("string")
+            .tolist()
+        ) == [
+            "RETAIL|R1005",
+            "SME|B2001",
+        ]
         snapshot = state_store.load_snapshot()
         assert len(snapshot.network.nodes) == (
             len(initial_network.nodes) + 4
@@ -380,9 +390,9 @@ def main() -> None:
         print("Sparse one-off evidence: passed")
         print("Counterparty phase barrier: passed")
         print("Customer AI actions executed in test: 3")
-        print("Further recursive sources queued: 1")
+        print("Further recursive sources queued: 2")
         print("Graph nodes/edges unchanged: passed")
-        print("Current frontier width: 1")
+        print("Current frontier width: 2")
         print("Maximum observed depth: 4")
         print("Guardrail mode: telemetry only")
         print("Unchanged repeated customer calls: 0")

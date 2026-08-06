@@ -34,6 +34,7 @@ from network_mule_discovery.scenario_1_synthetic_data import RUN_DATE
 from smoke_test_scenario_1_recursive_counterparty_frontier import (
     RecursiveCounterpartyAdapter,
     build_initial_state,
+    forbidden_factory,
 )
 from smoke_test_scenario_1_recursive_customer_frontier import (
     RecursiveCustomerAdapter,
@@ -88,16 +89,83 @@ def main() -> None:
             ignore_index=True,
         )
         state_store = CsvDailyStateStore(state_directory)
-        before_snapshot = state_store.load_snapshot()
-        before_call_count = len(CsvAiCallLedger(state_directory).load())
-        ready_discovery = customer_result.customer_frontier.controlled_run.final_plan.actionable_queue.loc[
-            lambda frame: frame["action_type"].eq(
-                "DISCOVER_CUSTOMER_RELATIONSHIPS"
+        ready_discovery = (
+            customer_result.customer_frontier
+            .controlled_run.final_plan
+            .actionable_queue.loc[
+                lambda frame: frame["action_type"].eq(
+                    "DISCOVER_CUSTOMER_RELATIONSHIPS"
+                )
+            ]
+        )
+        assert sorted(
+            ready_discovery["subject_key"]
+            .astype("string")
+            .tolist()
+        ) == [
+            "RETAIL|R1005",
+            "SME|B2001",
+        ]
+
+        try:
+            run_recursive_termination(
+                source_directory=source_directory,
+                state_directory=state_directory,
+                run_date=RUN_DATE,
+                supplemental_subject_payloads=all_payloads,
             )
-        ]
-        assert list(ready_discovery["subject_key"]) == [
-            "RETAIL|R1005"
-        ]
+        except Exception as exc:
+            assert (
+                "Expected exactly one final recursive "
+                "discovery action"
+                in str(exc)
+            )
+        else:
+            raise AssertionError(
+                "Legacy termination accepted multiple "
+                "ready discovery sources."
+            )
+
+        b2001_result = run_recursive_counterparty_frontier(
+            source_directory=source_directory,
+            state_directory=state_directory,
+            run_date=RUN_DATE,
+            supplemental_subject_payloads=all_payloads,
+            selected_source_entity_key="SME|B2001",
+            settings=DailyAiSettings(
+                live_ai_enabled=False,
+                daily_call_limit=4,
+                run_call_limit=1,
+            ),
+            adapter_factory=forbidden_factory,
+        )
+        assert b2001_result.controlled_run.calls_executed == 0
+        assert (
+            b2001_result.discovery.source_entity_key
+            == "SME|B2001"
+        )
+        assert (
+            b2001_result.discovery.new_counterparty_keys
+            == tuple()
+        )
+        assert b2001_result.discovery.relationships.empty
+
+        remaining_discovery = (
+            b2001_result.controlled_run
+            .final_plan.actionable_queue.loc[
+                lambda frame: frame["action_type"].eq(
+                    "DISCOVER_CUSTOMER_RELATIONSHIPS"
+                )
+            ]
+        )
+        assert list(
+            remaining_discovery["subject_key"]
+        ) == ["RETAIL|R1005"]
+
+        before_snapshot = state_store.load_snapshot()
+        before_call_count = len(
+            CsvAiCallLedger(state_directory).load()
+        )
 
         result = run_recursive_termination(
             source_directory=source_directory,
@@ -116,7 +184,7 @@ def main() -> None:
         assert result.discovery.unshared_counterparty_keys == tuple()
         assert result.final_plan.actionable_queue.empty
         assert result.final_plan.failed_closed_item_count == 0
-        assert len(result.expansion_ledger) == 2
+        assert len(result.expansion_ledger) == 3
         final_rows = result.expansion_ledger.loc[
             result.expansion_ledger["source_entity_key"].eq(
                 "RETAIL|R1005"
@@ -124,7 +192,7 @@ def main() -> None:
         ]
         assert len(final_rows) == 1
         final_row = final_rows.iloc[0]
-        assert str(final_row["round_number"]) == "2"
+        assert str(final_row["round_number"]) == "3"
         assert final_row["source_entity_key"] == "RETAIL|R1005"
         assert str(final_row["relationship_rows_found"]) == "0"
         assert final_row["expansion_status"] == "COMPLETED"
@@ -166,7 +234,7 @@ def main() -> None:
         )
         assert repeated.discovery_performed is False
         assert repeated.expansion_ledger_appended is False
-        assert len(repeated.expansion_ledger) == 2
+        assert len(repeated.expansion_ledger) == 3
         assert repeated.final_plan.actionable_queue.empty
         repeated_snapshot = state_store.load_snapshot()
         assert len(repeated_snapshot.network.nodes) == len(
@@ -182,7 +250,7 @@ def main() -> None:
         print("Already observed counterparty skipped: 1")
         print("New shared counterparties discovered: 0")
         print("New graph nodes/edges: 0/0")
-        print("Expansion round two completed with zero rows: passed")
+        print("Expansion round three completed with zero rows: passed")
         print("Ready frontier count: 0")
         print("Failed frontier count: 0")
         print("Termination reason: FRONTIER_EXHAUSTED")

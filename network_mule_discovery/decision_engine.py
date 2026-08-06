@@ -1240,6 +1240,10 @@ def apply_persisted_decisions(
         str,
         set[str],
     ] = {}
+    same_eid_customer_groups: dict[
+        str,
+        set[str],
+    ] = {}
 
     customer_nodes = nodes.loc[
         nodes["node_type"] == "CUSTOMER"
@@ -1266,17 +1270,25 @@ def apply_persisted_decisions(
             )
         ]
 
-        deterministic_eligible = (
-            incident_edges["edge_type"]
-            .isin(
-                DETERMINISTIC_CUSTOMER_EDGE_TYPES
-            )
-            & incident_edges[
+        deterministic_edge_allowed = (
+            incident_edges[
                 "customer_discovery_allowed_flag"
             ]
             .astype("string")
             .str.upper()
             .eq("TRUE")
+        )
+        same_eid_eligible = (
+            incident_edges["edge_type"]
+            .eq("SAME_EMIRATES_ID")
+            & deterministic_edge_allowed
+        ).any()
+        deterministic_eligible = (
+            incident_edges["edge_type"]
+            .isin(
+                DETERMINISTIC_CUSTOMER_EDGE_TYPES
+            )
+            & deterministic_edge_allowed
         ).any()
 
         approved_counterparty_eligible = (
@@ -1301,6 +1313,12 @@ def apply_persisted_decisions(
             row.entity_key,
             set(),
         ).add(row.group_id)
+
+        if same_eid_eligible:
+            same_eid_customer_groups.setdefault(
+                row.entity_key,
+                set(),
+            ).add(row.group_id)
 
         nodes.at[
             row.Index,
@@ -1342,8 +1360,9 @@ def apply_persisted_decisions(
         nodes.at[
             row.Index,
             "expansion_source_flag",
-        ] = (
-            decision_record.decision
+        ] = bool(
+            same_eid_eligible
+            or decision_record.decision
             == "MULE_LIKE"
         )
 
@@ -1492,6 +1511,26 @@ def apply_persisted_decisions(
                 priority=20,
             )
 
+            continue
+
+        if customer_key in same_eid_customer_groups:
+            append_queue_item(
+                action_type=(
+                    "DISCOVER_CUSTOMER_RELATIONSHIPS"
+                ),
+                subject_type="CUSTOMER",
+                subject_key=customer_key,
+                feature_snapshot_hash=(
+                    snapshot.feature_snapshot_hash
+                ),
+                group_ids=sorted(
+                    customer_group_ids
+                ),
+                queue_reason=(
+                    "DETERMINISTIC_SAME_EMIRATES_ID"
+                ),
+                priority=30,
+            )
             continue
 
         if decision_record.decision == "MULE_LIKE":

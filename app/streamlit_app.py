@@ -1335,6 +1335,7 @@ def main() -> None:
 
     with header_left:
         st.write(
+            f"Run **{run_id}** · "
             f"Seed **{selected['anchor']}** · "
             f"{selected['run_date']} · "
             f"{_humanize(selected['group_status'])}"

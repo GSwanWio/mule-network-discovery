@@ -41,7 +41,6 @@ from network_mule_discovery.frontier_termination import (
 )
 from network_mule_discovery.recursive_counterparty_frontier import (
     RecursiveCounterpartyFrontierResult,
-    discover_recursive_counterparties,
     run_recursive_counterparty_frontier,
 )
 from network_mule_discovery.recursive_customer_frontier import (
@@ -50,7 +49,6 @@ from network_mule_discovery.recursive_customer_frontier import (
 )
 from network_mule_discovery.recursive_termination import (
     RecursiveTerminationResult,
-    run_recursive_termination,
 )
 from network_mule_discovery.bundle_source_adapter import (
     build_canonical_discovery_inputs_from_bundle,
@@ -774,16 +772,22 @@ def select_next_frontier_action(
             f"{unsupported_actions}"
         )
 
-    if len(observed_actions) != 1:
-        raise SourceContractError(
-            "The actionable frontier contains mixed "
-            f"breadth-first phases: {sorted(observed_actions)}"
-        )
-
-    action_type = next(iter(observed_actions))
+    phase_priority = (
+        "RUN_COUNTERPARTY_AI",
+        "RUN_CUSTOMER_AI",
+        "DISCOVER_CUSTOMER_RELATIONSHIPS",
+    )
+    action_type = next(
+        action
+        for action in phase_priority
+        if action in observed_actions
+    )
+    phase_rows = prepared.loc[
+        prepared["action_type"].eq(action_type)
+    ]
     subject_keys = tuple(
         sorted(
-            prepared["subject_key"]
+            phase_rows["subject_key"]
             .drop_duplicates()
             .tolist()
         )
@@ -801,12 +805,8 @@ def select_next_frontier_action(
     if (
         action_type
         == "DISCOVER_CUSTOMER_RELATIONSHIPS"
-        and len(subject_keys) != 1
     ):
-        raise SourceContractError(
-            "Recursive discovery requires exactly one "
-            f"approved source; found {len(subject_keys)}."
-        )
+        subject_keys = subject_keys[:1]
 
     return DailyFrontierSelection(
         action_type=action_type,
@@ -840,6 +840,9 @@ class DailyBreadthFirstStepResult:
 
     step_number: int
     selection: DailyFrontierSelection
+    counterparty_ai: (
+        CounterpartyFrontierRunResult | None
+    ) = None
     recursive_counterparty: (
         RecursiveCounterpartyFrontierResult | None
     ) = None
@@ -1238,102 +1241,77 @@ def run_breadth_first_frontier(
                 frontier_termination=termination,
             )
 
+        if selection.action_type == "RUN_COUNTERPARTY_AI":
+            snapshot = state_store.load_snapshot()
+            run_kwargs = {
+                "unified_result": snapshot.network,
+                "supplemental_subject_payloads": (
+                    supplemental_payloads
+                ),
+                "state_directory": (
+                    resolved_state_directory
+                ),
+                "run_date": run_date,
+                "settings": ai_settings,
+            }
+
+            if counterparty_adapter_factory is not None:
+                run_kwargs[
+                    "adapter_factory"
+                ] = counterparty_adapter_factory
+
+            try:
+                counterparty_ai = (
+                    run_counterparty_ai_frontier(
+                        **run_kwargs
+                    )
+                )
+            except Exception as exc:
+                failure_reason = (
+                    ProductionAiStartupError.code
+                    if isinstance(
+                        exc,
+                        ProductionAiStartupError,
+                    )
+                    else (
+                        "RECURSIVE_COUNTERPARTY_"
+                        "AI_PHASE_FAILED"
+                    )
+                )
+
+                try:
+                    _persist_run_outcome(
+                        state_directory=(
+                            resolved_state_directory
+                        ),
+                        termination_status="FAILED",
+                        termination_reason=(
+                            failure_reason
+                        ),
+                    )
+                except Exception as finalization_exc:
+                    exc.add_note(
+                        "Run failure finalization also "
+                        "failed: "
+                        f"{type(finalization_exc).__name__}: "
+                        f"{finalization_exc}"
+                    )
+
+                raise
+
+            steps.append(
+                DailyBreadthFirstStepResult(
+                    step_number=step_number,
+                    selection=selection,
+                    counterparty_ai=counterparty_ai,
+                )
+            )
+            continue
+
         if (
             selection.action_type
             == "DISCOVER_CUSTOMER_RELATIONSHIPS"
         ):
-            source_entity_key = (
-                selection.subject_keys[0]
-            )
-            group_ids = _discovery_group_ids(
-                actionable_queue=(
-                    plan.actionable_queue
-                ),
-                source_entity_key=(
-                    source_entity_key
-                ),
-            )
-            snapshot = state_store.load_snapshot()
-            discovery_preview = (
-                discover_recursive_counterparties(
-                    observed_network=(
-                        snapshot.network
-                    ),
-                    source_entity_key=(
-                        source_entity_key
-                    ),
-                    group_ids=group_ids,
-                    run_date=run_date,
-                    raw_sources=(
-                        behavioral_sources
-                        .raw_sources
-                    ),
-                )
-            )
-
-            if (
-                not discovery_preview
-                .new_counterparty_keys
-                and discovery_preview
-                .relationships
-                .empty
-            ):
-                termination = (
-                    run_recursive_termination(
-                        state_directory=(
-                            resolved_state_directory
-                        ),
-                        run_date=run_date,
-                        supplemental_subject_payloads=(
-                            supplemental_payloads
-                        ),
-                        raw_sources=(
-                            behavioral_sources
-                            .raw_sources
-                        ),
-                    )
-                )
-                status, reason = (
-                    _termination_values(
-                        termination
-                        .termination_status
-                    )
-                )
-                steps.append(
-                    DailyBreadthFirstStepResult(
-                        step_number=step_number,
-                        selection=selection,
-                    )
-                )
-
-                _persist_run_outcome(
-                    state_directory=(
-                        resolved_state_directory
-                    ),
-                    termination_status=status,
-                    termination_reason=reason,
-                )
-
-                return DailyBreadthFirstRunResult(
-                    customer_phase=customer_phase,
-                    steps=tuple(steps),
-                    supplemental_subject_payloads=(
-                        supplemental_payloads
-                    ),
-                    final_plan=(
-                        termination.final_plan
-                    ),
-                    termination_status=status,
-                    termination_reason=reason,
-                    recursive_termination=(
-                        termination
-                    ),
-                )
-
-        if selection.action_type in {
-            "RUN_COUNTERPARTY_AI",
-            "DISCOVER_CUSTOMER_RELATIONSHIPS",
-        }:
             run_kwargs = {
                 "state_directory": (
                     resolved_state_directory
@@ -1350,6 +1328,9 @@ def run_breadth_first_frontier(
                 "international_counterparty_currency_activity": (
                     behavioral_sources
                     .international_counterparty_currency_activity
+                ),
+                "selected_source_entity_key": (
+                    selection.subject_keys[0]
                 ),
             }
 
@@ -1396,6 +1377,7 @@ def run_breadth_first_frontier(
                     )
 
                 raise
+
             supplemental_payloads = (
                 _merge_supplemental_payloads(
                     supplemental_payloads,

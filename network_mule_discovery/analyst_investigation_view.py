@@ -352,6 +352,7 @@ def _decision_from_status(
 def _decision_presentation(
     *,
     is_seed: bool,
+    deterministic_same_eid: bool,
     decision: str,
     node_status: str,
     assessment_status: str,
@@ -359,6 +360,15 @@ def _decision_presentation(
     """Return the journey category and analyst outcome."""
     if is_seed:
         return "SEED", "Starting point"
+
+    if deterministic_same_eid:
+        return (
+            "DETERMINISTIC",
+            (
+                "Final determination — mule due to direct "
+                "Emirates ID link"
+            ),
+        )
 
     normalized_decision = decision.upper()
     combined_status = (
@@ -395,6 +405,32 @@ def _decision_presentation(
     return "PENDING", "Awaiting AI decision"
 
 
+def _journey_edge_priority(
+    edge_type: str,
+    relationship_status: str,
+) -> int:
+    """Prefer valid discovery paths over suppressed side-links."""
+    normalized_type = _clean_text(edge_type).upper()
+    normalized_status = _clean_text(
+        relationship_status
+    ).upper()
+
+    if normalized_type == "SAME_EMIRATES_ID":
+        return 0
+
+    if normalized_status == (
+        "COUNTERPARTY_APPROVED_SUSPICIOUS"
+    ):
+        return 1
+
+    if normalized_status.startswith(
+        "COUNTERPARTY_SUPPRESSED"
+    ):
+        return 3
+
+    return 2
+
+
 def _build_breadth_first_journey(
     *,
     nodes: pd.DataFrame,
@@ -413,7 +449,7 @@ def _build_breadth_first_journey(
 
     adjacency: dict[
         str,
-        list[tuple[str, str, str]],
+        list[tuple[str, str, str, str]],
     ] = {
         node_id: []
         for node_id in node_ids
@@ -439,12 +475,16 @@ def _build_breadth_first_journey(
         relationship = _clean_text(
             edge.edge_type
         )
+        relationship_status = _clean_text(
+            edge.relationship_status
+        )
 
         adjacency[source_id].append(
             (
                 target_id,
                 _clean_text(edge.edge_id),
                 relationship,
+                relationship_status,
             )
         )
         adjacency[target_id].append(
@@ -452,6 +492,7 @@ def _build_breadth_first_journey(
                 source_id,
                 _clean_text(edge.edge_id),
                 relationship,
+                relationship_status,
             )
         )
 
@@ -488,9 +529,14 @@ def _build_breadth_first_journey(
             neighbour_id,
             _,
             edge_type,
+            relationship_status,
         ) in sorted(
             adjacency[node_id],
             key=lambda item: (
+                _journey_edge_priority(
+                    item[2],
+                    item[3],
+                ),
                 item[0],
                 item[1],
             ),
@@ -579,6 +625,25 @@ def build_analyst_investigation_view(
         frame_name="Investigation AI calls",
     )
 
+    same_eid_edges = visible_edges.loc[
+        visible_edges["edge_type"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+        .eq("SAME_EMIRATES_ID")
+    ]
+    deterministic_same_eid_node_ids = set(
+        same_eid_edges["source_node_id"]
+        .astype("string")
+        .str.strip()
+    ).union(
+        set(
+            same_eid_edges["target_node_id"]
+            .astype("string")
+            .str.strip()
+        )
+    )
+
     display_labels = {
         _clean_text(row.node_id): (
             _clean_text(row.display_label)
@@ -645,6 +710,11 @@ def build_analyst_investigation_view(
             expansion_outcome,
         ) = _decision_presentation(
             is_seed=seed_flag,
+            deterministic_same_eid=(
+                not seed_flag
+                and node_id
+                in deterministic_same_eid_node_ids
+            ),
             decision=decision,
             node_status=_clean_text(
                 row.node_status

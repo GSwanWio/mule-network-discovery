@@ -79,20 +79,52 @@ def main() -> None:
     )
     assert failed.action_type == "FAIL_CLOSED"
 
-    try:
+    mixed_ai = select_next_frontier_action(
+        actionable_queue=queue(
+            ("RUN_COUNTERPARTY_AI", "CP1"),
+            ("RUN_CUSTOMER_AI", "RETAIL|R1"),
+        ),
+        failed_closed_item_count=0,
+    )
+    assert mixed_ai.action_type == "RUN_COUNTERPARTY_AI"
+    assert mixed_ai.subject_keys == ("CP1",)
+
+    customer_before_discovery = (
         select_next_frontier_action(
             actionable_queue=queue(
-                ("RUN_COUNTERPARTY_AI", "CP1"),
                 ("RUN_CUSTOMER_AI", "RETAIL|R1"),
+                (
+                    "DISCOVER_CUSTOMER_RELATIONSHIPS",
+                    "SME|B1",
+                ),
             ),
             failed_closed_item_count=0,
         )
-    except Exception as exc:
-        assert "mixed breadth-first phases" in str(exc)
-    else:
-        raise AssertionError(
-            "Mixed frontier phases were not rejected."
-        )
+    )
+    assert (
+        customer_before_discovery.action_type
+        == "RUN_CUSTOMER_AI"
+    )
+    assert customer_before_discovery.subject_keys == (
+        "RETAIL|R1",
+    )
+
+    multiple_discovery = select_next_frontier_action(
+        actionable_queue=queue(
+            (
+                "DISCOVER_CUSTOMER_RELATIONSHIPS",
+                "SME|B1",
+            ),
+            (
+                "DISCOVER_CUSTOMER_RELATIONSHIPS",
+                "RETAIL|R2",
+            ),
+        ),
+        failed_closed_item_count=0,
+    )
+    assert multiple_discovery.subject_keys == (
+        "RETAIL|R2",
+    )
 
     print("Daily frontier selection smoke test passed.")
     print("Counterparty phase selection: passed")

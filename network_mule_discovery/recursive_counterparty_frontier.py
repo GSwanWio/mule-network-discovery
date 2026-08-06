@@ -949,6 +949,42 @@ def _resume_discovery_from_state(
         unshared_counterparty_keys=tuple(),
     )
 
+
+def _next_expansion_round_number(
+    expansion_ledger: pd.DataFrame,
+) -> int:
+    """Return the next monotonic expansion round."""
+    if expansion_ledger.empty:
+        return 1
+
+    values = pd.to_numeric(
+        expansion_ledger["round_number"],
+        errors="coerce",
+    ).dropna()
+
+    return (
+        int(values.max()) + 1
+        if not values.empty
+        else 1
+    )
+
+
+def _empty_behavioral_feature_result(
+) -> BehavioralFeatureResult:
+    """Return schema-safe empty recursive feature output."""
+    return BehavioralFeatureResult(
+        counterparty_profiles=pd.DataFrame(),
+        counterparty_customer_profiles=pd.DataFrame(),
+        counterparty_payloads=pd.DataFrame(
+            columns=[
+                "subject_type",
+                "subject_key",
+                "feature_payload_json",
+            ]
+        ),
+    )
+
+
 def run_recursive_counterparty_frontier(
     *,
     state_directory: Path | str,
@@ -960,6 +996,7 @@ def run_recursive_counterparty_frontier(
     international_counterparty_currency_activity: (
         pd.DataFrame | None
     ) = None,
+    selected_source_entity_key: str | None = None,
     adapter_factory=None,
 ) -> RecursiveCounterpartyFrontierResult:
     """Consume approved discovery work and run new counterparty AI."""
@@ -986,19 +1023,60 @@ def run_recursive_counterparty_frontier(
             supplemental_subject_payloads
         ),
     )
-    discovery_queue = pre_discovery_plan.actionable_queue.loc[
-        pre_discovery_plan.actionable_queue[
-            "action_type"
-        ].eq(DISCOVERY_ACTION_TYPE)
-    ]
+    discovery_queue = (
+        pre_discovery_plan.actionable_queue.loc[
+            pre_discovery_plan.actionable_queue[
+                "action_type"
+            ].eq(DISCOVERY_ACTION_TYPE)
+        ]
+        .copy()
+    )
 
-    if len(discovery_queue) > 1:
-        raise RecursiveCounterpartyFrontierError(
-            "Expected at most one approved recursive discovery source; "
-            f"found {len(discovery_queue)}."
+    if not discovery_queue.empty:
+        discovery_queue["subject_key"] = (
+            discovery_queue["subject_key"]
+            .astype("string")
+            .str.strip()
+        )
+        discovery_queue = (
+            discovery_queue
+            .sort_values(
+                by=[
+                    "subject_key",
+                    "queue_item_id",
+                ],
+                kind="stable",
+            )
+            .reset_index(drop=True)
         )
 
-    if len(discovery_queue) == 1:
+        if selected_source_entity_key is not None:
+            normalized_source_key = str(
+                selected_source_entity_key
+            ).strip()
+
+            if not normalized_source_key:
+                raise RecursiveCounterpartyFrontierError(
+                    "selected_source_entity_key must be nonblank."
+                )
+
+            discovery_queue = (
+                discovery_queue.loc[
+                    discovery_queue["subject_key"].eq(
+                        normalized_source_key
+                    )
+                ]
+                .copy()
+                .reset_index(drop=True)
+            )
+
+            if len(discovery_queue) != 1:
+                raise RecursiveCounterpartyFrontierError(
+                    "The selected recursive discovery source "
+                    "does not resolve to exactly one ready queue "
+                    f"item: {normalized_source_key}."
+                )
+
         discovery_item = discovery_queue.iloc[0]
         source_entity_key = str(discovery_item["subject_key"])
         source_group_ids = tuple(
@@ -1018,20 +1096,23 @@ def run_recursive_counterparty_frontier(
             run_date=resolved_run_date,
         )
 
-        if not discovery.new_counterparty_keys:
-            raise RecursiveCounterpartyFrontierError(
-                "Approved recursive source produced no unseen shared "
-                "counterparties."
-            )
-
         before_node_count = len(snapshot.network.nodes)
         before_edge_count = len(snapshot.network.edges)
-        expanded_network = merge_expansion_relationships(
-            graph=snapshot.network,
-            relationships=discovery.relationships,
-            group_ids=list(source_group_ids),
-            run_date=resolved_run_date,
-        )
+
+        if discovery.relationships.empty:
+            expanded_network = snapshot.network
+        else:
+            expanded_network = merge_expansion_relationships(
+                graph=snapshot.network,
+                relationships=discovery.relationships,
+                group_ids=list(source_group_ids),
+                run_date=resolved_run_date,
+            )
+            state_store.save_network_state(
+                expanded_network,
+                resolved_run_date,
+            )
+
         new_node_count = (
             len(expanded_network.nodes) - before_node_count
         )
@@ -1039,16 +1120,16 @@ def run_recursive_counterparty_frontier(
             len(expanded_network.edges) - before_edge_count
         )
 
-        state_store.save_network_state(
-            expanded_network,
-            resolved_run_date,
-        )
         state_store.append_expansion_ledger(
             pd.DataFrame(
                 [
                     {
                         "run_date": str(resolved_run_date),
-                        "round_number": "1",
+                        "round_number": (
+                            _next_expansion_round_number(
+                                snapshot.expansion_ledger
+                            )
+                        ),
                         "queue_item_id": str(
                             discovery_item["queue_item_id"]
                         ),
@@ -1077,16 +1158,21 @@ def run_recursive_counterparty_frontier(
         new_node_count = 0
         new_edge_count = 0
 
-    new_features = build_behavioral_features(
-        raw_sources=resolved_sources,
-        international_counterparty_currency_activity=(
-            international_counterparty_currency_activity
-        ),
-        counterparty_keys=(
-            discovery.new_counterparty_keys
-        ),
-        run_date=resolved_run_date,
-    )
+    if discovery.new_counterparty_keys:
+        new_features = build_behavioral_features(
+            raw_sources=resolved_sources,
+            international_counterparty_currency_activity=(
+                international_counterparty_currency_activity
+            ),
+            counterparty_keys=(
+                discovery.new_counterparty_keys
+            ),
+            run_date=resolved_run_date,
+        )
+    else:
+        new_features = (
+            _empty_behavioral_feature_result()
+        )
     combined_payloads = pd.concat(
         [
             supplemental_subject_payloads,

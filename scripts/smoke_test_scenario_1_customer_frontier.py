@@ -463,10 +463,14 @@ def main() -> None:
                 "DISCOVER_CUSTOMER_RELATIONSHIPS"
             )
         ]
-        assert len(recursive_queue) == 1
-        assert recursive_queue.iloc[0][
-            "subject_key"
-        ] == "RETAIL|R1002"
+        assert sorted(
+            recursive_queue["subject_key"]
+            .astype("string")
+            .tolist()
+        ) == [
+            "RETAIL|R1002",
+            "SME|B2001",
+        ]
 
         assert not unified_result.nodes[
             "counterparty_key"
@@ -498,7 +502,7 @@ def main() -> None:
     print("Deterministic EID context: passed")
     print("Counterparty phase barrier: passed")
     print("Customer AI actions executed in test: 5")
-    print("Recursive sources queued: 1")
+    print("Recursive sources queued: 2")
     print("Second-layer counterparty exposed early: 0")
     print("Unchanged repeated customer calls: 0")
     print("Scenario labels in runtime payloads: 0")

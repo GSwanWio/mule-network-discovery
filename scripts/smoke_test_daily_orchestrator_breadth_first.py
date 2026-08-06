@@ -184,14 +184,30 @@ def main() -> None:
             "DISCOVER_CUSTOMER_RELATIONSHIPS",
             "RUN_CUSTOMER_AI",
             "DISCOVER_CUSTOMER_RELATIONSHIPS",
+            "DISCOVER_CUSTOMER_RELATIONSHIPS",
+            "TERMINATE_FRONTIER",
+        ]
+        assert [
+            step.selection.subject_keys
+            for step in result.steps
+        ] == [
+            ("RETAIL|R1002",),
+            (
+                "RETAIL|R1005",
+                "RETAIL|R1006",
+                "RETAIL|R1007",
+            ),
+            ("RETAIL|R1005",),
+            ("SME|B2001",),
+            tuple(),
         ]
 
         assert result.termination_status == "TERMINATED"
         assert result.termination_reason == (
             "FRONTIER_EXHAUSTED"
         )
-        assert result.recursive_termination is not None
-        assert result.frontier_termination is None
+        assert result.recursive_termination is None
+        assert result.frontier_termination is not None
         assert result.final_plan.actionable_queue.empty
         assert (
             result.final_plan.failed_closed_item_count
@@ -285,7 +301,7 @@ def main() -> None:
         print("Initial customer AI calls: 5")
         print("Recursive counterparty AI calls: 1")
         print("Recursive customer AI calls: 3")
-        print("Breadth-first steps completed: 3")
+        print("Breadth-first steps completed: 5")
         print("Supplemental subject payloads: 11")
         print("Ready frontier count: 0")
         print("Failed frontier count: 0")

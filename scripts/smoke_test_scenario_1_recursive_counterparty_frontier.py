@@ -337,8 +337,14 @@ def main() -> None:
                 "DISCOVER_CUSTOMER_RELATIONSHIPS"
             )
         ]
-        assert len(discovery_queue) == 1
-        assert discovery_queue.iloc[0]["subject_key"] == "RETAIL|R1002"
+        assert sorted(
+            discovery_queue["subject_key"]
+            .astype("string")
+            .tolist()
+        ) == [
+            "RETAIL|R1002",
+            "SME|B2001",
+        ]
         assert not initial_network.nodes["counterparty_key"].eq(
             "LOCAL_ACCOUNT|990200000001"
         ).any()
@@ -348,6 +354,7 @@ def main() -> None:
             state_directory=state_directory,
             run_date=RUN_DATE,
             supplemental_subject_payloads=existing_payloads,
+            selected_source_entity_key="RETAIL|R1002",
             settings=DailyAiSettings(
                 live_ai_enabled=False,
                 daily_call_limit=1,
@@ -406,9 +413,17 @@ def main() -> None:
         assert list(initial_cp_queue["subject_key"]) == [
             "LOCAL_ACCOUNT|990200000001"
         ]
-        assert not planning_result.controlled_run.final_plan.actionable_queue[
-            "action_type"
-        ].eq("DISCOVER_CUSTOMER_RELATIONSHIPS").any()
+        planning_discovery = (
+            planning_result.controlled_run
+            .final_plan.actionable_queue.loc[
+                lambda frame: frame["action_type"].eq(
+                    "DISCOVER_CUSTOMER_RELATIONSHIPS"
+                )
+            ]
+        )
+        assert list(
+            planning_discovery["subject_key"]
+        ) == ["SME|B2001"]
         assert not planning_result.controlled_run.final_plan.actionable_queue[
             "action_type"
         ].eq("RUN_CUSTOMER_AI").any()
@@ -456,32 +471,73 @@ def main() -> None:
         ]
         assert live_result.guardrail_telemetry.iloc[0][
             "current_frontier_width"
-        ] == 3
-        assert not live_result.controlled_run.final_plan.actionable_queue[
-            "action_type"
-        ].eq("DISCOVER_CUSTOMER_RELATIONSHIPS").any()
+        ] == 4
+        remaining_discovery = (
+            live_result.controlled_run
+            .final_plan.actionable_queue.loc[
+                lambda frame: frame["action_type"].eq(
+                    "DISCOVER_CUSTOMER_RELATIONSHIPS"
+                )
+            ]
+        )
+        assert list(
+            remaining_discovery["subject_key"]
+        ) == ["SME|B2001"]
         ledger = state_store.load_expansion_ledger()
         assert len(ledger) == 1
         assert ledger.iloc[0]["expansion_status"] == "COMPLETED"
 
-        unchanged_result = run_recursive_counterparty_frontier(
+        all_counterparty_payloads = pd.concat(
+            [
+                existing_payloads,
+                live_result.new_features.counterparty_payloads,
+            ],
+            ignore_index=True,
+        )
+        b2001_result = run_recursive_counterparty_frontier(
             source_directory=source_directory,
             state_directory=state_directory,
             run_date=RUN_DATE,
-            supplemental_subject_payloads=existing_payloads,
+            supplemental_subject_payloads=(
+                all_counterparty_payloads
+            ),
+            selected_source_entity_key="SME|B2001",
             settings=DailyAiSettings(
-                live_ai_enabled=True,
+                live_ai_enabled=False,
                 daily_call_limit=2,
                 run_call_limit=1,
             ),
             adapter_factory=forbidden_factory,
         )
-        assert unchanged_result.controlled_run.calls_executed == 0
+        assert b2001_result.controlled_run.calls_executed == 0
+        assert (
+            b2001_result.discovery.source_entity_key
+            == "SME|B2001"
+        )
+        assert (
+            b2001_result.discovery.new_counterparty_keys
+            == tuple()
+        )
+        assert b2001_result.discovery.relationships.empty
+        assert not (
+            b2001_result.controlled_run
+            .final_plan.actionable_queue[
+                "action_type"
+            ]
+            .eq("DISCOVER_CUSTOMER_RELATIONSHIPS")
+            .any()
+        )
+        ledger = state_store.load_expansion_ledger()
+        assert len(ledger) == 2
+        assert list(ledger["source_entity_key"]) == [
+            "RETAIL|R1002",
+            "SME|B2001",
+        ]
 
     print(
         "Scenario 1 recursive counterparty frontier smoke test passed."
     )
-    print("Approved recursive sources consumed: 1")
+    print("Approved recursive sources consumed: 2")
     print("New shared counterparties discovered: 1")
     print("New linked customers observed: 3")
     print("Already observed counterparties skipped: 1")
