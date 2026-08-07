@@ -76,7 +76,9 @@ def run_once():
         ),
         run_date=RUN_DATE,
         output_directory=OUTPUT_DIRECTORY,
-        guardrails=RecursiveGuardrails(),
+        guardrails=RecursiveGuardrails(
+            max_customer_expansions=25,
+        ),
         persist_outputs=True,
     )
 
@@ -118,7 +120,7 @@ def main() -> None:
 
     assert len(
         first_result.expansion_ledger
-    ) == 5
+    ) == 12
 
     assert first_result.remaining_queue.empty
 
@@ -126,7 +128,7 @@ def main() -> None:
         first_result.groups[
             "recursive_expansion_source_count"
         ].sum()
-        == 7
+        == 14
     )
 
     assert (

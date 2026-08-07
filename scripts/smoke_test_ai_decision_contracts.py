@@ -99,9 +99,30 @@ def main() -> None:
             "Invalid evidence output was accepted."
         )
 
-    settings = load_openai_settings()
+    previous_api_key = os.environ.get(
+        "OPENAI_API_KEY"
+    )
+    os.environ["OPENAI_API_KEY"] = (
+        "offline-smoke-test-key"
+    )
 
-    assert settings.api_key
+    try:
+        settings = load_openai_settings()
+    finally:
+        if previous_api_key is None:
+            os.environ.pop(
+                "OPENAI_API_KEY",
+                None,
+            )
+        else:
+            os.environ[
+                "OPENAI_API_KEY"
+            ] = previous_api_key
+
+    assert (
+        settings.api_key
+        == "offline-smoke-test-key"
+    )
     assert settings.model
     assert settings.prompt_version
     assert settings.timeout_seconds > 0
@@ -128,7 +149,7 @@ def main() -> None:
     )
 
     print(
-        "OPENAI_API_KEY available: passed"
+        "Offline OPENAI_API_KEY fixture: passed"
     )
 
     print(

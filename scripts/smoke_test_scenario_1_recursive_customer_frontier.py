@@ -325,7 +325,7 @@ def main() -> None:
         assert int(telemetry["total_node_count"]) == 108
         assert int(telemetry["total_edge_count"]) == 109
         assert int(telemetry["current_frontier_width"]) == 2
-        assert int(telemetry["expansion_source_count"]) == 3
+        assert int(telemetry["expansion_source_count"]) == 4
         assert int(telemetry["new_node_count"]) == 0
         assert int(telemetry["new_edge_count"]) == 0
         assert telemetry["guardrail_status"] == (

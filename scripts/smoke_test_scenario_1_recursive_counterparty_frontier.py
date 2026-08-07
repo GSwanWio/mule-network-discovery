@@ -32,6 +32,9 @@ from network_mule_discovery.customer_behavioral_features import (
 from network_mule_discovery.daily_ai_runner import (
     DailyAiSettings,
 )
+from network_mule_discovery.frontier_ai import (
+    run_counterparty_ai_frontier,
+)
 from network_mule_discovery.daily_state import (
     CsvDailyStateStore,
     build_incremental_daily_plan,
@@ -396,7 +399,7 @@ def main() -> None:
         ] == "TELEMETRY_ONLY"
         assert planning_result.guardrail_telemetry.iloc[0][
             "expansion_source_count"
-        ] == 2
+        ] == 3
         assert not bool(
             planning_result.guardrail_telemetry.iloc[0][
                 "breadth_cap_enforced_flag"
@@ -441,12 +444,23 @@ def main() -> None:
         ):
             assert forbidden not in payload_text
 
+        all_counterparty_payloads = pd.concat(
+            [
+                existing_payloads,
+                planning_result.new_features.counterparty_payloads,
+            ],
+            ignore_index=True,
+        )
+
         adapter = RecursiveCounterpartyAdapter()
-        live_result = run_recursive_counterparty_frontier(
-            source_directory=source_directory,
+
+        counterparty_ai = run_counterparty_ai_frontier(
+            unified_result=planning_result.expanded_network,
+            supplemental_subject_payloads=(
+                all_counterparty_payloads
+            ),
             state_directory=state_directory,
             run_date=RUN_DATE,
-            supplemental_subject_payloads=existing_payloads,
             settings=DailyAiSettings(
                 live_ai_enabled=True,
                 daily_call_limit=1,
@@ -454,46 +468,54 @@ def main() -> None:
             ),
             adapter_factory=lambda: adapter,
         )
-        assert live_result.controlled_run.calls_executed == 1
+
+        assert (
+            counterparty_ai.controlled_run.calls_executed
+            == 1
+        )
         assert adapter.calls == [
             "LOCAL_ACCOUNT|990200000001"
         ]
-        next_customers = live_result.controlled_run.final_plan.actionable_queue.loc[
-            lambda frame: frame["action_type"].eq(
-                "RUN_CUSTOMER_AI"
-            ),
-            "subject_key",
-        ].sort_values().tolist()
+
+        next_customers = (
+            counterparty_ai.controlled_run
+            .final_plan.actionable_queue.loc[
+                lambda frame: frame["action_type"].eq(
+                    "RUN_CUSTOMER_AI"
+                ),
+                "subject_key",
+            ]
+            .sort_values()
+            .tolist()
+        )
+
         assert next_customers == [
             "RETAIL|R1005",
             "RETAIL|R1006",
             "RETAIL|R1007",
         ]
-        assert live_result.guardrail_telemetry.iloc[0][
-            "current_frontier_width"
-        ] == 4
+
         remaining_discovery = (
-            live_result.controlled_run
+            counterparty_ai.controlled_run
             .final_plan.actionable_queue.loc[
                 lambda frame: frame["action_type"].eq(
                     "DISCOVER_CUSTOMER_RELATIONSHIPS"
                 )
             ]
         )
+
         assert list(
             remaining_discovery["subject_key"]
         ) == ["SME|B2001"]
-        ledger = state_store.load_expansion_ledger()
-        assert len(ledger) == 1
-        assert ledger.iloc[0]["expansion_status"] == "COMPLETED"
 
-        all_counterparty_payloads = pd.concat(
-            [
-                existing_payloads,
-                live_result.new_features.counterparty_payloads,
-            ],
-            ignore_index=True,
+        ledger = state_store.load_expansion_ledger()
+
+        assert len(ledger) == 1
+        assert (
+            ledger.iloc[0]["expansion_status"]
+            == "COMPLETED"
         )
+
         b2001_result = run_recursive_counterparty_frontier(
             source_directory=source_directory,
             state_directory=state_directory,
@@ -529,10 +551,16 @@ def main() -> None:
         )
         ledger = state_store.load_expansion_ledger()
         assert len(ledger) == 2
-        assert list(ledger["source_entity_key"]) == [
-            "RETAIL|R1002",
-            "SME|B2001",
-        ]
+        ledger_rounds = {
+            str(row["source_entity_key"]): str(
+                row["round_number"]
+            )
+            for _, row in ledger.iterrows()
+        }
+        assert ledger_rounds == {
+            "RETAIL|R1002": "1",
+            "SME|B2001": "2",
+        }
 
     print(
         "Scenario 1 recursive counterparty frontier smoke test passed."

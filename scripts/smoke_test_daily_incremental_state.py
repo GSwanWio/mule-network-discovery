@@ -83,7 +83,9 @@ def run_day_one():
         ),
         run_date=DAY_ONE,
         output_directory=OUTPUT_DIRECTORY,
-        guardrails=RecursiveGuardrails(),
+        guardrails=RecursiveGuardrails(
+            max_customer_expansions=25,
+        ),
         persist_outputs=False,
     )
 

@@ -50,6 +50,7 @@ def main() -> None:
     ] == [
         "step_number",
         "selection",
+        "counterparty_ai",
         "recursive_counterparty",
         "recursive_customer",
     ]
