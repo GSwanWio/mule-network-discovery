@@ -33,3 +33,6 @@ data/analyst_review_source/
 data/analyst_review_state/
 data/analyst_visual_review/
 data/step8_live_acceptance/
+
+# Generated Step 8 model-behavior acceptance state
+data/step8_model_behavior_acceptance/
