@@ -78,9 +78,9 @@ OUTCOME_BY_DECISION = {
     "LEGITIMATE_SUPPRESS": "Stopped — legitimate counterparty",
     "COMMON_PUBLIC_SUPPRESS": "Stopped — common/public counterparty",
     "INSUFFICIENT_EVIDENCE_SUPPRESS": (
-        "Stopped — insufficient counterparty evidence"
+        "Stopped — insufficient evidence"
     ),
-    "EXPOSED_VULNERABLE": "Stopped — exposed or vulnerable customer",
+    "EXPOSED_VULNERABLE": "Stopped — potential victim",
     "LOW_CONCERN": "Stopped — low-concern customer",
     "INSUFFICIENT_EVIDENCE": (
         "Stopped — insufficient customer evidence"
@@ -140,6 +140,24 @@ def _humanize(value: object) -> str:
         .replace("_", " ")
         .strip()
         .title()
+    )
+
+
+
+def _analyst_decision_label(value: object) -> str:
+    """Return analyst-facing text for one AI decision."""
+    normalized = _clean_text(value).upper()
+
+    labels = {
+        "EXPOSED_VULNERABLE": "Potential victim",
+        "INSUFFICIENT_EVIDENCE_SUPPRESS": (
+            "Insufficient evidence"
+        ),
+    }
+
+    return labels.get(
+        normalized,
+        _humanize(normalized),
     )
 
 
@@ -773,7 +791,7 @@ def build_analyst_investigation_view(
                     )
                 ),
                 "behavioral_decision_label": (
-                    _humanize(decision)
+                    _analyst_decision_label(decision)
                     if decision
                     else (
                         "Not assessed"
@@ -809,7 +827,7 @@ def build_analyst_investigation_view(
                     else (
                         "Mule — direct Emirates ID link"
                         if decision_category == "DETERMINISTIC"
-                        else _humanize(
+                        else _analyst_decision_label(
                             decision
                             if decision
                             else "Pending"

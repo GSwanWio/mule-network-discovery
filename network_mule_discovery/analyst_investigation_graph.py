@@ -139,10 +139,12 @@ def _outcome_caption(
     *,
     node_type: str,
     decision_category: str,
+    decision_label: str = "",
 ) -> str:
     """Return one concise analyst-facing node outcome."""
     normalized_type = node_type.upper()
     normalized_category = decision_category.upper()
+    normalized_label = decision_label.strip()
 
     if normalized_category == "SEED":
         return "Confirmed seed"
@@ -154,6 +156,12 @@ def _outcome_caption(
 
         return "Suspicious counterparty"
     if normalized_category == "STOP":
+        if normalized_label in {
+            "Potential victim",
+            "Insufficient evidence",
+        }:
+            return normalized_label
+
         if normalized_type == "CUSTOMER":
             return "Non-suspicious customer"
 
@@ -260,6 +268,9 @@ def build_analyst_investigation_graph(
             _outcome_caption(
                 node_type=node_type,
                 decision_category=decision_category,
+                decision_label=_clean_text(
+                    row.decision_label
+                ),
             ),
             display_label,
         ]
